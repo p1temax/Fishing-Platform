@@ -1,0 +1,196 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.24.12"
+  NODE_VERSION: "22"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Push / PR: compile check (frontend export + Go tests + host binary)
+  # ---------------------------------------------------------------------------
+  verify:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend (static export for Go embed)
+        working-directory: frontend
+        run: npm run build
+
+      - name: Verify frontend dist
+        run: |
+          test -f frontend/dist/index.html
+          test -d frontend/dist/_next
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Build control plane (linux/amd64)
+        run: |
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o fishing-platform-linux-amd64 main.go
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o fishing-agent-linux-amd64 ./agent
+          ls -lh fishing-platform-linux-amd64 fishing-agent-linux-amd64
+
+  # ---------------------------------------------------------------------------
+  # Tag (v*) / manual: cross-compile all targets + upload artifacts / Release
+  # ---------------------------------------------------------------------------
+  release:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend (static export for Go embed)
+        working-directory: frontend
+        run: npm run build
+
+      - name: Verify frontend dist
+        run: |
+          test -f frontend/dist/index.html
+          test -d frontend/dist/_next
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Cross-compile platform and agent binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          rm -rf release/*
+
+          targets=(
+            "linux amd64 fishing-platform-linux-amd64"
+            "linux arm64 fishing-platform-linux-arm64"
+            "windows amd64 fishing-platform-windows-amd64.exe"
+            "windows arm64 fishing-platform-windows-arm64.exe"
+            "darwin amd64 fishing-platform-macos-amd64"
+            "darwin arm64 fishing-platform-macos-arm64"
+          )
+
+          for entry in "${targets[@]}"; do
+            read -r os arch binary <<<"${entry}"
+            echo "==> Building ${binary}"
+            GOOS="${os}" GOARCH="${arch}" CGO_ENABLED=0 \
+              go build -ldflags="-s -w" -o "release/${binary}" main.go
+
+            agent_binary="${binary/fishing-platform/fishing-agent}"
+            echo "==> Building ${agent_binary}"
+            GOOS="${os}" GOARCH="${arch}" CGO_ENABLED=0 \
+              go build -ldflags="-s -w" -o "release/${agent_binary}" ./agent
+          done
+
+          cp config.yaml.example release/config.yaml.example
+          cp agent.yaml.example release/agent.yaml.example
+          ls -lh release/
+
+      - name: Package release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          mkdir -p archives
+
+          # One archive per OS/arch with both binaries + example configs
+          pairs=(
+            "linux-amd64:fishing-platform-linux-amd64:fishing-agent-linux-amd64"
+            "linux-arm64:fishing-platform-linux-arm64:fishing-agent-linux-arm64"
+            "windows-amd64:fishing-platform-windows-amd64.exe:fishing-agent-windows-amd64.exe"
+            "windows-arm64:fishing-platform-windows-arm64.exe:fishing-agent-windows-arm64.exe"
+            "macos-amd64:fishing-platform-macos-amd64:fishing-agent-macos-amd64"
+            "macos-arm64:fishing-platform-macos-arm64:fishing-agent-macos-arm64"
+          )
+
+          for pair in "${pairs[@]}"; do
+            IFS=':' read -r name platform agent <<<"${pair}"
+            staging="fishing-platform-${name}"
+            mkdir -p "${staging}"
+            cp "${platform}" "${agent}" config.yaml.example agent.yaml.example "${staging}/"
+            if [[ "${name}" == windows-* ]]; then
+              zip -r "archives/${staging}.zip" "${staging}"
+            else
+              tar -czf "archives/${staging}.tar.gz" "${staging}"
+            fi
+            rm -rf "${staging}"
+          done
+
+          ls -lh archives/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fishing-platform-binaries
+          path: |
+            release/fishing-platform-*
+            release/fishing-agent-*
+            release/config.yaml.example
+            release/agent.yaml.example
+            release/archives/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/archives/*
+            release/config.yaml.example
+            release/agent.yaml.example
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

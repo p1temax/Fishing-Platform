@@ -1,0 +1,42 @@
+# 服务监听配置（启动期，改后需重启）
+server:
+  # 后端 HTTP 服务监听端口；前端生产包也由该服务托管。
+  port: 8000
+  # Gin 运行模式：debug / release / test；生产环境建议使用 release。
+  gin_mode: release
+
+# 数据库配置（启动期）
+database:
+  # SQLite 数据库文件路径；相对路径基于程序启动目录。
+  path: ./data/fishing.db
+
+# 安全相关配置（初始化密钥，设置后不要随意更换）
+security:
+  # 数据加密密钥，用于加密机器人密钥、凭据密码等敏感字段；上线前请替换为随机长字符串，设置后不要随意更换。
+  encryption_key: replace-with-a-generated-key
+  # JWT 签名密钥；上线前请替换为随机长字符串。
+  jwt_secret: replace-with-a-long-random-secret
+  # 生成的 Flask 服务向平台换取 token 时使用的共享密钥；Docker 和本地 Flask 执行模式都会使用。
+  container_secret: replace-with-another-long-random-secret
+  # Agent 首次注册平台时使用的令牌；为空时会回退使用 container_secret。生产环境建议单独设置。
+  agent_registration_token: replace-with-agent-registration-token
+  # 是否启用平台 Basic Auth；true 时访问页面和登录接口前会先进行 Basic Auth 校验。
+  platform_basic_auth_enabled: true
+
+# 生成的 Flask 服务在 Docker 容器内使用的默认证书路径（部署约定）
+container:
+  # 容器内证书文件路径；项目启用 SSL 时会把上传的证书挂载到该路径。
+  ssl_cert_path: /app/certificates/cert.pem
+  # 容器内私钥文件路径；需与 ssl_cert_path 配套。
+  ssl_key_path: /app/certificates/key.pem
+
+# ---------------------------------------------------------------------------
+# 以下可变配置已迁移到平台「系统 → 邮件追踪」，首次启动会从这里种子到数据库。
+# 日常请在平台 UI 修改；此处仅作初始化/兼容回退。
+# ---------------------------------------------------------------------------
+# public_base_url: "http://127.0.0.1:8000"
+# mail_tracking:
+#   enabled: true
+#   secret: ""
+#   allow_redirect_hosts: []
+#   # click/open 路径由每个邮件活动自动生成，不再在此配置

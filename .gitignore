@@ -1,0 +1,63 @@
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tmp
+*.bak
+
+# Local runtime configuration and secrets
+config.yaml
+agent.yaml
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Runtime data (credentials DB, admin password file, uploaded HTML, etc.)
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+
+# Build artifacts and local binaries
+release/
+build/
+dist/
+frontend/dist/
+fishing-platform
+fishing-platform.exe
+fishing-agent
+fishing-agent.exe
+*.exe
+
+# Local frontend backups / superseded trees (not part of the product)
+frontend-backups/
+frontend-vue-superseded/
+
+# Duplicate / scratch docs
+README copy.md
+
+# Dependencies and package-manager caches
+node_modules/
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Nested repository metadata
+frontend/.git/
+
+# TypeScript / Next build caches
+frontend/tsconfig.tsbuildinfo
+frontend/.next/
+frontend/out/
+
+# Local screenshots / personal UI captures
+README.assets/image-*.png
