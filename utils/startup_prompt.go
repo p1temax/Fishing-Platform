@@ -3,8 +3,10 @@ package utils
 import (
 	"bufio"
 	"fmt"
+	"math/rand"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -15,7 +17,6 @@ const (
 	ansiReset  = "\033[0m"
 	ansiBold   = "\033[1m"
 	ansiDim    = "\033[2m"
-	ansiItalic = "\033[3m"
 	ansiYellow = "\033[33m"
 	ansiRed    = "\033[31m"
 	ansiCyan   = "\033[36m"
@@ -45,6 +46,76 @@ func stdoutIsTTY() bool {
 		return false
 	}
 	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+func ansiRGB(r, g, b int) string {
+	if r < 0 {
+		r = 0
+	} else if r > 255 {
+		r = 255
+	}
+	if g < 0 {
+		g = 0
+	} else if g > 255 {
+		g = 255
+	}
+	if b < 0 {
+		b = 0
+	} else if b > 255 {
+		b = 255
+	}
+	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
+}
+
+func lerpByte(a, b int, t float64) int {
+	v := float64(a) + (float64(b)-float64(a))*t + 0.5
+	if v < 0 {
+		return 0
+	}
+	if v > 255 {
+		return 255
+	}
+	return int(v)
+}
+
+// gradientText paints non-space runes left→right between two RGB stops.
+func gradientText(enabled bool, text string, from, to [3]int) string {
+	if !enabled {
+		return text
+	}
+	runes := []rune(text)
+	n := 0
+	for _, r := range runes {
+		if r != ' ' {
+			n++
+		}
+	}
+	if n == 0 {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text) * 16)
+	b.WriteString(ansiBold)
+	i := 0
+	for _, r := range runes {
+		if r == ' ' {
+			b.WriteRune(r)
+			continue
+		}
+		t := 0.0
+		if n > 1 {
+			t = float64(i) / float64(n-1)
+		}
+		b.WriteString(ansiRGB(
+			lerpByte(from[0], to[0], t),
+			lerpByte(from[1], to[1], t),
+			lerpByte(from[2], to[2], t),
+		))
+		b.WriteRune(r)
+		i++
+	}
+	b.WriteString(ansiReset)
+	return b.String()
 }
 
 func colorize(enabled bool, code, text string) string {
@@ -280,8 +351,8 @@ func PrintStartupOK(message string) {
 	fmt.Println(colorize(color, ansiGreen, "✔  "+message))
 }
 
-// PrintAppBanner prints a startup panel matched to the security-warning box
-// (same width / frame language), with a larger wordmark and runtime meta.
+// PrintAppBanner prints a Sliver-style free-floating wordmark (no outer frame)
+// plus [*] runtime lines.
 func PrintAppBanner(version string, port int, ginMode string) {
 	if strings.TrimSpace(version) == "" {
 		version = AppVersion
@@ -291,46 +362,34 @@ func PrintAppBanner(version string, port int, ginMode string) {
 	}
 
 	color := stdoutIsTTY()
-	border := ansiCyan
-	innerWidth := startupPanelInnerWidth
-
-	// Slanted "FISHING" wordmark (visual italic — many terminals ignore ANSI italic).
+	// Dense ANSI-shadow style mark (Sliver-like) with a left→right gradient.
 	art := []string{
-		`    _______________ __  _______   ________`,
-		`   / ____/  _/ ___// / / /  _/ | / / ____/`,
-		`  / /_   / / \__ \/ /_/ // //  |/ / / __  `,
-		` / __/ _/ / ___/ / __  // // /|  / /_/ /  `,
-		`/_/   /___//____/_/ /_/___/_/ |_/\____/   `,
+		`███████╗██╗███████╗██╗  ██╗██╗███╗   ██╗ ██████╗`,
+		`██╔════╝██║██╔════╝██║  ██║██║████╗  ██║██╔════╝`,
+		`█████╗  ██║███████╗███████║██║██╔██╗ ██║██║  ███╗`,
+		`██╔══╝  ██║╚════██║██╔══██║██║██║╚██╗██║██║   ██║`,
+		`██║     ██║███████║██║  ██║██║██║ ╚████║╚██████╔╝`,
+		`╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝`,
 	}
+	gradients := [][2][3]int{
+		{{34, 197, 94}, {34, 211, 238}},   // green → cyan
+		{{239, 68, 68}, {244, 114, 182}},  // red → pink
+		{{56, 189, 248}, {167, 139, 250}}, // sky → violet
+		{{250, 204, 21}, {249, 115, 22}},  // yellow → orange
+		{{52, 211, 153}, {99, 102, 241}},  // teal → indigo
+	}
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	pair := gradients[rng.Intn(len(gradients))]
 
 	fmt.Println()
-	printBoxTop(color, border, innerWidth)
-	printBoxLine(color, border, "", innerWidth)
-	printBoxLine(color, border, "", innerWidth)
 	for _, line := range art {
-		printBoxLine(color, border, colorize(color, ansiBold+ansiItalic+ansiCyan, centerText(line, innerWidth)), innerWidth)
+		fmt.Println(gradientText(color, line, pair[0], pair[1]))
 	}
-	printBoxLine(color, border, "", innerWidth)
-	printBoxLine(color, border, colorize(color, ansiBold, centerText("PLATFORM", innerWidth)), innerWidth)
-	printBoxLine(color, border, "", innerWidth)
-	printBoxLine(color, border, "", innerWidth)
-	printBoxSep(color, border, innerWidth)
-	printBoxLine(color, border, "", innerWidth)
-	printBoxLine(color, border, colorize(color, ansiBold, fmt.Sprintf("  Version   %s", version)), innerWidth)
-	printBoxLine(color, border, colorize(color, ansiBold, fmt.Sprintf("  Listen    :%d", port)), innerWidth)
-	printBoxLine(color, border, colorize(color, ansiBold, fmt.Sprintf("  Mode      %s", ginMode)), innerWidth)
-	printBoxLine(color, border, colorize(color, ansiDim, "  Credential capture operations console"), innerWidth)
-	printBoxLine(color, border, "", innerWidth)
-	printBoxBottom(color, border, innerWidth)
 	fmt.Println()
-}
-
-func centerText(s string, width int) string {
-	w := visibleWidth(s)
-	if w >= width {
-		return s
-	}
-	pad := width - w
-	left := pad / 2
-	return strings.Repeat(" ", left) + s + strings.Repeat(" ", pad-left)
+	fmt.Println(colorize(color, ansiDim, "Credential capture operations console"))
+	fmt.Println()
+	fmt.Println(colorize(color, ansiBold, fmt.Sprintf("[*] Server v%s", version)))
+	fmt.Println(colorize(color, ansiBold, fmt.Sprintf("[*] Listen  :%d", port)))
+	fmt.Println(colorize(color, ansiBold, fmt.Sprintf("[*] Mode    %s", ginMode)))
+	fmt.Println()
 }
