@@ -61,3 +61,7 @@ frontend/out/
 
 # Local screenshots / personal UI captures
 README.assets/image-*.png
+
+# Local QR relay script secrets
+scripts/qr-relay/config.yaml
+scripts/qr-relay/.venv/

@@ -215,6 +215,63 @@ export const api = {
   getMailCampaignEvents(id: number | string) {
     return apiClient.get(`/api/mail-campaigns/${id}/events/`);
   },
+  getInfoGatherJobs() {
+    return apiClient.get("/api/info-gather-jobs/");
+  },
+  getInfoGatherJob(id: number | string) {
+    return apiClient.get(`/api/info-gather-jobs/${id}/`);
+  },
+  getInfoGatherFindings(id: number | string) {
+    return apiClient.get(`/api/info-gather-jobs/${id}/findings/`);
+  },
+  createInfoGatherJob(data: {
+    target: string;
+    notes?: string;
+    include_x_search?: boolean;
+  }) {
+    return apiClient.post("/api/info-gather-jobs/", data, { timeout: 60000 });
+  },
+  retryInfoGatherJob(id: number | string) {
+    return apiClient.post(`/api/info-gather-jobs/${id}/retry/`);
+  },
+  deleteInfoGatherJob(id: number | string) {
+    return apiClient.delete(`/api/info-gather-jobs/${id}/`);
+  },
+  getQrRelays() {
+    return apiClient.get("/api/qr-relays/");
+  },
+  getQrRelay(id: number | string) {
+    return apiClient.get(`/api/qr-relays/${id}/`);
+  },
+  createQrRelay(data: { name: string; slug?: string }) {
+    return apiClient.post("/api/qr-relays/", data);
+  },
+  rotateQrRelayToken(id: number | string) {
+    return apiClient.post(`/api/qr-relays/${id}/rotate-token/`);
+  },
+  rotateQrRelaySlug(id: number | string) {
+    return apiClient.post(`/api/qr-relays/${id}/rotate-slug/`);
+  },
+  setQrRelayEnabled(id: number | string, enabled: boolean) {
+    return apiClient.post(`/api/qr-relays/${id}/enabled/`, { enabled });
+  },
+  deleteQrRelay(id: number | string) {
+    return apiClient.delete(`/api/qr-relays/${id}/`);
+  },
+  getQrRelayFrames(id: number | string) {
+    return apiClient.get(`/api/qr-relays/${id}/frames/`);
+  },
+  promoteQrRelayFrame(id: number | string, frameId: number | string) {
+    return apiClient.post(`/api/qr-relays/${id}/frames/${frameId}/promote/`);
+  },
+  downloadQrRelayScript(relayId?: number | string) {
+    const params = relayId != null && relayId !== "" ? { relay_id: relayId } : undefined;
+    return apiClient.get("/api/qr-relays/script.zip", {
+      params,
+      responseType: "blob",
+      timeout: 120000,
+    });
+  },
 };
 
 

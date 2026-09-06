@@ -1,0 +1,23 @@
+# Fishing Platform — local QR screen relay
+platform_url: "http://127.0.0.1:8000"
+upload_token: "paste-upload-token-from-console"
+
+# Capture interval in milliseconds
+interval_ms: 500
+
+# Heartbeat when no new QR is uploaded (keeps console health "online")
+heartbeat_interval_ms: 3000
+
+# Optional screen region (pixels). Omit for full primary monitor.
+# Or run: python qr_relay.py --pick-region -c config.yaml
+# region:
+#   left: 100
+#   top: 100
+#   width: 400
+#   height: 400
+
+# Skip upload when decoded payload / image hash unchanged
+dedupe: true
+
+# Verify TLS when platform_url is https
+verify_tls: true

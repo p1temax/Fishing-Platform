@@ -62,6 +62,7 @@ type projectListResponse struct {
 	ContainerID        string                 `json:"container_id"`
 	Port               uint                   `json:"port"`
 	LoginURL           string                 `json:"login_url"`
+	QrRelayID          *uint                  `json:"qr_relay_id"`
 	BuildStatus        models.BuildStatus     `json:"build_status"`
 	DeploymentRevision int64                  `json:"deployment_revision"`
 	TaskID             string                 `json:"task_id"`
@@ -92,6 +93,7 @@ type projectDetailResponse struct {
 	ContainerID        string                 `json:"container_id"`
 	Port               uint                   `json:"port"`
 	LoginURL           string                 `json:"login_url"`
+	QrRelayID          *uint                  `json:"qr_relay_id"`
 	BuildStatus        models.BuildStatus     `json:"build_status"`
 	DeploymentRevision int64                  `json:"deployment_revision"`
 	TaskID             string                 `json:"task_id"`
@@ -115,6 +117,7 @@ type projectUpdateRequest struct {
 	Port           uint   `json:"port"`
 	Robots         []uint `json:"robots"`
 	AgentIDs       []uint `json:"agent_ids"`
+	QrRelayID      *uint  `json:"qr_relay_id"`
 }
 
 func projectDeploymentResponses(deployments []models.ProjectDeployment) ([]uint, []deploymentResponse) {
@@ -219,6 +222,7 @@ func toProjectListResponse(project models.Project, health *models.ProjectHealthC
 		ContainerID:        project.ContainerID,
 		Port:               project.Port,
 		LoginURL:           project.LoginURL,
+		QrRelayID:          project.QrRelayID,
 		BuildStatus:        project.BuildStatus,
 		DeploymentRevision: project.DeploymentRevision,
 		TaskID:             project.TaskID,
@@ -252,6 +256,7 @@ func toProjectDetailResponse(project models.Project, health *models.ProjectHealt
 		ContainerID:        project.ContainerID,
 		Port:               project.Port,
 		LoginURL:           project.LoginURL,
+		QrRelayID:          project.QrRelayID,
 		BuildStatus:        project.BuildStatus,
 		DeploymentRevision: project.DeploymentRevision,
 		TaskID:             project.TaskID,
@@ -522,10 +527,7 @@ func prepareProjectRuntimeFiles(project *models.Project, targetDir string) (stri
 }
 
 func writeProjectIndexHTML(project *models.Project, dstPath string) error {
-	rendered, err := utils.RenderProjectHTMLFile(project.HtmlFilePath, utils.ProjectHTMLVars{
-		SubmitURL:   project.ContainerRoute,
-		RedirectURL: project.LoginURL,
-	})
+	rendered, err := utils.RenderProjectHTMLFile(project.HtmlFilePath, projectHTMLVars(project))
 	if err != nil {
 		return err
 	}
@@ -684,6 +686,10 @@ func saveUploadedCertificateFiles(c *gin.Context) (string, string, error) {
 
 // CreateProject creates a new project
 func CreateProject(c *gin.Context) {
+	user, ok := currentUserOrAbort(c)
+	if !ok {
+		return
+	}
 	var project models.Project
 	var selectedAgentIDs []uint
 
@@ -707,6 +713,10 @@ func CreateProject(c *gin.Context) {
 	project.ContainerRoute = containerRouteFromForm(c)
 	project.LoginURL = c.PostForm("login_url")
 	project.UseHTTPS = strings.EqualFold(strings.TrimSpace(c.PostForm("use_https")), "true")
+	project.QrRelayID = parseOptionalUintString(c.PostForm("qr_relay_id"))
+	if !ensureOwnedQrRelay(c, config.GetDB(), user, project.QrRelayID) {
+		return
+	}
 
 	// Parse port
 	portStr := c.PostForm("port")
@@ -790,10 +800,6 @@ func CreateProject(c *gin.Context) {
 		return
 	}
 
-	user, ok := currentUserOrAbort(c)
-	if !ok {
-		return
-	}
 	project.CreatedBy = user.ID
 	db := config.GetDB()
 	if !ensureOwnedRobotIDs(c, db, user, robotIDsFromModels(project.Robots)) {
@@ -895,6 +901,7 @@ func UpdateProject(c *gin.Context) {
 		project.ContainerRoute = containerRouteFromForm(c)
 		project.LoginURL = c.PostForm("login_url")
 		project.UseHTTPS = strings.EqualFold(strings.TrimSpace(c.PostForm("use_https")), "true")
+		project.QrRelayID = parseOptionalUintString(c.PostForm("qr_relay_id"))
 		selectedAgentIDs, err = parseRobotIDs(c.PostForm("agent_ids"))
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid agent_ids field", "details": err.Error()})
@@ -964,6 +971,7 @@ func UpdateProject(c *gin.Context) {
 		project.LoginURL = req.LoginURL
 		project.UseHTTPS = req.UseHTTPS
 		project.Port = req.Port
+		project.QrRelayID = req.QrRelayID
 		selectedAgentIDs = req.AgentIDs
 
 		robots, err := loadRobotsByIDs(db, req.Robots)
@@ -972,6 +980,10 @@ func UpdateProject(c *gin.Context) {
 			return
 		}
 		project.Robots = robots
+	}
+
+	if !ensureOwnedQrRelay(c, db, user, project.QrRelayID) {
+		return
 	}
 
 	if project.UseHTTPS && !hasProjectSSLCert(project) {

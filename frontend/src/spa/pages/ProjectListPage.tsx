@@ -41,6 +41,7 @@ type Agent = {
   agent_id?: string;
   status?: string;
 };
+type QrRelayOption = { id: number; name: string; slug?: string; enabled?: boolean };
 
 export type ProjectRow = {
   id: number;
@@ -58,6 +59,7 @@ export type ProjectRow = {
   robot_ids?: number[];
   agent_ids?: number[];
   robots?: Robot[];
+  qr_relay_id?: number | null;
 };
 
 const PLATFORM = "platform";
@@ -105,6 +107,7 @@ type FormState = {
   port: number;
   robots: number[];
   agent_ids: (number | string)[];
+  qr_relay_id: string;
 };
 
 const emptyForm = (): FormState => ({
@@ -116,6 +119,7 @@ const emptyForm = (): FormState => ({
   port: 6000,
   robots: [],
   agent_ids: [PLATFORM],
+  qr_relay_id: "",
 });
 
 export default function ProjectListPage() {
@@ -124,6 +128,7 @@ export default function ProjectListPage() {
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [robots, setRobots] = useState<Robot[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [qrRelays, setQrRelays] = useState<QrRelayOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ type: "ok" | "err" | "info"; text: string } | null>(null);
 
@@ -181,11 +186,21 @@ export default function ProjectListPage() {
     }
   }, [showToast, t]);
 
+  const fetchQrRelays = useCallback(async () => {
+    try {
+      const { data } = await api.getQrRelays();
+      setQrRelays(Array.isArray(data) ? (data as QrRelayOption[]) : []);
+    } catch {
+      showToast("err", t("project.qrRelayFetchFailed"));
+    }
+  }, [showToast, t]);
+
   useEffect(() => {
     fetchProjects();
     fetchRobots();
     fetchAgents();
-  }, [fetchProjects, fetchRobots, fetchAgents]);
+    fetchQrRelays();
+  }, [fetchProjects, fetchRobots, fetchAgents, fetchQrRelays]);
 
   const accessUrl = (record: ProjectRow) =>
     buildAccessUrl(record, typeof window !== "undefined" ? window.location.hostname : "localhost");
@@ -214,6 +229,7 @@ export default function ProjectListPage() {
       port: record.port || 6000,
       robots: record.robot_ids || [],
       agent_ids: record.agent_ids?.length ? record.agent_ids : [PLATFORM],
+      qr_relay_id: record.qr_relay_id ? String(record.qr_relay_id) : "",
     });
     setHtmlFile(null);
     setCertFile(null);
@@ -282,6 +298,7 @@ export default function ProjectListPage() {
       fd.append("robots", JSON.stringify(form.robots));
       const agentIds = form.agent_ids.filter((id) => id !== PLATFORM);
       fd.append("agent_ids", JSON.stringify(agentIds));
+      fd.append("qr_relay_id", form.qr_relay_id || "");
       if (htmlFile) fd.append("html_file", htmlFile);
       if (form.use_https && certFile) fd.append("ssl_cert_file", certFile);
       if (form.use_https && keyFile) fd.append("ssl_key_file", keyFile);
@@ -657,6 +674,32 @@ export default function ProjectListPage() {
                 }
                 placeholder={t("project.originUrlPlaceholder")}
               />
+
+              <Label
+                htmlFor="qr_relay_id"
+                className="flex h-9 items-center justify-end whitespace-nowrap text-right text-sm leading-none"
+              >
+                {t("project.qrRelay")}
+              </Label>
+              <div className="space-y-1">
+                <select
+                  id="qr_relay_id"
+                  className="flex h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                  value={form.qr_relay_id}
+                  onChange={(e) =>
+                    setForm({ ...form, qr_relay_id: e.target.value })
+                  }
+                >
+                  <option value="">{t("project.qrRelayNone")}</option>
+                  {qrRelays.map((relay) => (
+                    <option key={relay.id} value={String(relay.id)}>
+                      {relay.name}
+                      {relay.enabled === false ? " (paused)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-500">{t("project.qrRelayHint")}</p>
+              </div>
 
               <Label
                 htmlFor="port"

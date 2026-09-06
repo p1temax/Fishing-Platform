@@ -16,7 +16,10 @@ import LoginPage from "@/spa/pages/LoginPage";
 import DashboardPage from "@/spa/pages/DashboardPage";
 import WorkbenchMailPage from "@/spa/pages/WorkbenchMailPage";
 import WorkbenchMailDetailPage from "@/spa/pages/WorkbenchMailDetailPage";
-import WorkbenchComingSoonPage from "@/spa/pages/WorkbenchComingSoonPage";
+import WorkbenchInfoGatheringPage from "@/spa/pages/WorkbenchInfoGatheringPage";
+import WorkbenchInfoGatheringDetailPage from "@/spa/pages/WorkbenchInfoGatheringDetailPage";
+import WorkbenchQrPhishingPage from "@/spa/pages/WorkbenchQrPhishingPage";
+import WorkbenchQrPhishingDetailPage from "@/spa/pages/WorkbenchQrPhishingDetailPage";
 import WorkbenchPageBuilderPage from "@/spa/pages/WorkbenchPageBuilderPage";
 import ProjectListPage from "@/spa/pages/ProjectListPage";
 import ProjectDetailLayout from "@/spa/pages/project/ProjectDetailLayout";
@@ -128,8 +131,16 @@ export default function SpaApp() {
           <Route path="/workbench/mail" element={<WorkbenchMailPage />} />
           <Route path="/workbench/mail/:id" element={<WorkbenchMailDetailPage />} />
           <Route path="/workbench/page-builder" element={<WorkbenchPageBuilderPage />} />
-          <Route path="/workbench/info-gathering" element={<WorkbenchComingSoonPage />} />
-          <Route path="/workbench/qr-phishing" element={<WorkbenchComingSoonPage />} />
+          <Route path="/workbench/info-gathering" element={<WorkbenchInfoGatheringPage />} />
+          <Route
+            path="/workbench/info-gathering/:id"
+            element={<WorkbenchInfoGatheringDetailPage />}
+          />
+          <Route path="/workbench/qr-phishing" element={<WorkbenchQrPhishingPage />} />
+          <Route
+            path="/workbench/qr-phishing/:id"
+            element={<WorkbenchQrPhishingDetailPage />}
+          />
           <Route path="/projects" element={<ProjectListPage />} />
           <Route path="/projects/:id" element={<ProjectDetailLayout />}>
             <Route index element={<Navigate to="overview" replace />} />

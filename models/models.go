@@ -211,6 +211,7 @@ type Project struct {
 	TaskID             string              `json:"task_id" gorm:"size:255"`
 	DeploymentRevision int64               `json:"deployment_revision" gorm:"default:1"`
 	DeletionPending    bool                `json:"deletion_pending" gorm:"default:false;index"`
+	QrRelayID          *uint               `json:"qr_relay_id" gorm:"index"` // optional live QR relay for {{QR_RELAY_*}}
 	CreatedBy          uint                `json:"created_by" gorm:"index;not null;default:0"`
 	CreatedAt          time.Time           `json:"created_at"`
 	UpdatedAt          time.Time           `json:"updated_at"`
@@ -643,6 +644,83 @@ type AIProfile struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+type InfoGatherJobStatus string
+
+const (
+	InfoGatherJobPending   InfoGatherJobStatus = "pending"
+	InfoGatherJobRunning   InfoGatherJobStatus = "running"
+	InfoGatherJobSucceeded InfoGatherJobStatus = "succeeded"
+	InfoGatherJobFailed    InfoGatherJobStatus = "failed"
+	InfoGatherJobPartial   InfoGatherJobStatus = "partial"
+)
+
+// InfoGatherJob is one AI web-search reconnaissance task.
+type InfoGatherJob struct {
+	ID             uint                `json:"id" gorm:"primaryKey"`
+	Target         string              `json:"target" gorm:"size:500;not null"`
+	Notes          string              `json:"notes" gorm:"type:text"`
+	IncludeXSearch bool                `json:"include_x_search" gorm:"default:false"`
+	Status         InfoGatherJobStatus `json:"status" gorm:"size:20;default:'pending';index"`
+	ErrorMessage   string              `json:"error_message" gorm:"type:text"`
+	RawResponse    string              `json:"-" gorm:"type:text"` // truncated model output; not listed in APIs
+	SummaryNotes   string              `json:"summary_notes" gorm:"type:text"`
+	EmailCount     int                 `json:"email_count" gorm:"default:0"`
+	PhoneCount     int                 `json:"phone_count" gorm:"default:0"`
+	FindingCount   int                 `json:"finding_count" gorm:"default:0"`
+	Model          string              `json:"model" gorm:"size:100"`
+	StartedAt      *time.Time          `json:"started_at"`
+	FinishedAt     *time.Time          `json:"finished_at"`
+	CreatedBy      uint                `json:"created_by" gorm:"index;not null;default:0"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
+}
+
+// InfoGatherFinding is one structured contact/OSINT row from a job.
+type InfoGatherFinding struct {
+	ID         uint      `json:"id" gorm:"primaryKey"`
+	JobID      uint      `json:"job_id" gorm:"index;not null;uniqueIndex:idx_info_gather_finding_dedupe"`
+	Kind       string    `json:"kind" gorm:"size:20;not null;uniqueIndex:idx_info_gather_finding_dedupe"`
+	Value      string    `json:"value" gorm:"size:500;not null;uniqueIndex:idx_info_gather_finding_dedupe"`
+	Label      string    `json:"label" gorm:"size:255"`
+	SourceURL  string    `json:"source_url" gorm:"size:1000"`
+	Snippet    string    `json:"snippet" gorm:"type:text"`
+	Confidence string    `json:"confidence" gorm:"size:20;default:'medium'"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// QrRelay is a live QR-code relay channel: local capture uploads frames;
+// a stable public URL always serves the latest image.
+type QrRelay struct {
+	ID           uint       `json:"id" gorm:"primaryKey"`
+	Name         string     `json:"name" gorm:"size:100;not null"`
+	Slug         string     `json:"slug" gorm:"size:64;not null;uniqueIndex"`
+	TokenHash    string     `json:"-" gorm:"size:64;not null;index"`
+	Enabled      bool       `json:"enabled" gorm:"default:true;index"`
+	ImagePath    string     `json:"-" gorm:"size:500"`
+	ContentType  string     `json:"content_type" gorm:"size:64"`
+	ImageBytes   int64      `json:"image_bytes" gorm:"default:0"`
+	Payload      string     `json:"payload" gorm:"type:text"` // optional decoded text from uploader
+	PayloadHash  string     `json:"payload_hash" gorm:"size:64"`
+	LastUploadAt *time.Time `json:"last_upload_at"`
+	LastSeenAt   *time.Time `json:"last_seen_at"` // upload or heartbeat
+	UploadCount  int64      `json:"upload_count" gorm:"default:0"`
+	CreatedBy    uint       `json:"created_by" gorm:"index;not null;default:0"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// QrRelayFrame is one historical uploaded frame for a relay (M3).
+type QrRelayFrame struct {
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	RelayID     uint      `json:"relay_id" gorm:"index;not null"`
+	ImagePath   string    `json:"-" gorm:"size:500;not null"`
+	ContentType string    `json:"content_type" gorm:"size:64"`
+	ImageBytes  int64     `json:"image_bytes" gorm:"default:0"`
+	Payload     string    `json:"payload" gorm:"type:text"`
+	PayloadHash string    `json:"payload_hash" gorm:"size:64;index"`
+	CreatedAt   time.Time `json:"created_at" gorm:"index"`
+}
+
 // AuditLog records immutable operator actions for compliance review.
 // There is intentionally no UpdatedAt / soft-delete / delete API.
 type AuditLog struct {
@@ -705,6 +783,10 @@ func AutoMigrate(db *gorm.DB) error {
 		&AIProfile{},
 		&HostMetricSample{},
 		&MailTrackingSetting{},
+		&InfoGatherJob{},
+		&InfoGatherFinding{},
+		&QrRelay{},
+		&QrRelayFrame{},
 	)
 
 	if err != nil {
@@ -726,7 +808,7 @@ func AutoMigrate(db *gorm.DB) error {
 	if admin.ID == 0 {
 		return nil
 	}
-	for _, model := range []any{&Project{}, &Robot{}, &IPBlacklist{}, &SmtpService{}, &MailCampaign{}, &PhishingPage{}} {
+	for _, model := range []any{&Project{}, &Robot{}, &IPBlacklist{}, &SmtpService{}, &MailCampaign{}, &PhishingPage{}, &InfoGatherJob{}, &QrRelay{}} {
 		if err := db.Model(model).Where("created_by = 0 OR created_by IS NULL").Update("created_by", admin.ID).Error; err != nil {
 			return err
 		}

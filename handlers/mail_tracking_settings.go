@@ -234,9 +234,28 @@ func EffectiveMailTrackingAllowRedirectHosts() []string {
 
 // DispatchMailTracking routes GET /api/:slug to open/click handlers when the
 // slug matches a per-campaign tracking path.
+func isReservedAPISlug(slug string) bool {
+	s := strings.ToLower(strings.Trim(strings.TrimSpace(slug), "/"))
+	switch s {
+	case "auth", "agents", "agent", "users", "projects", "robots", "messages",
+		"credentials", "ip-blacklist", "smtp-services", "mail-campaigns",
+		"phishing-pages", "dashboard", "audit-logs", "ai-settings",
+		"mail-tracking-settings", "info-gather-jobs", "qr-relays", "qr-relay",
+		"robot_push_logs":
+		return true
+	default:
+		return false
+	}
+}
+
 func DispatchMailTracking(c *gin.Context) {
 	slug := strings.TrimSpace(c.Param("slug"))
 	if slug == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "API endpoint not found"})
+		return
+	}
+	// Never let the catch-all /api/:slug shadow real platform API prefixes.
+	if isReservedAPISlug(slug) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "API endpoint not found"})
 		return
 	}

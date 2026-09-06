@@ -436,10 +436,7 @@ func DownloadDeploymentArtifact(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Project HTML artifact not found"})
 		return
 	}
-	artifact, err := utils.RenderProjectHTMLFile(deployment.Project.HtmlFilePath, utils.ProjectHTMLVars{
-		SubmitURL:   deployment.Project.ContainerRoute,
-		RedirectURL: deployment.Project.LoginURL,
-	})
+	artifact, err := utils.RenderProjectHTMLFile(deployment.Project.HtmlFilePath, projectHTMLVars(&deployment.Project))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read project artifact"})
 		return

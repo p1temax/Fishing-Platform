@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -33,8 +32,6 @@ func InitializeDatabase(dbPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-
-	log.Println("Database connection established successfully")
 
 	// Return DB, migrations will be run by caller
 	return nil

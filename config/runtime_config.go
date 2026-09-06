@@ -127,9 +127,9 @@ func FindInsecureSecuritySettings(cfg RuntimeFileConfig) []InsecureSecuritySetti
 		value        string
 		exampleValue string
 	}{
-		{"security.encryption_key", "数据加密密钥", cfg.Security.EncryptionKey, exampleEncryptionKey},
-		{"security.jwt_secret", "JWT 签名密钥", cfg.Security.JWTSecret, exampleJWTSecret},
-		{"security.container_secret", "容器共享密钥", cfg.Security.ContainerSecret, exampleContainerSecret},
+		{"security.encryption_key", "data encryption key", cfg.Security.EncryptionKey, exampleEncryptionKey},
+		{"security.jwt_secret", "JWT signing secret", cfg.Security.JWTSecret, exampleJWTSecret},
+		{"security.container_secret", "container shared secret", cfg.Security.ContainerSecret, exampleContainerSecret},
 	}
 
 	var issues []InsecureSecuritySetting
@@ -139,7 +139,7 @@ func FindInsecureSecuritySettings(cfg RuntimeFileConfig) []InsecureSecuritySetti
 			issues = append(issues, InsecureSecuritySetting{
 				Path:   check.path,
 				Label:  check.label,
-				Reason: "当前为空，无法提供稳定的安全保护",
+				Reason: "currently empty; cannot provide stable protection",
 			})
 			continue
 		}
@@ -147,7 +147,7 @@ func FindInsecureSecuritySettings(cfg RuntimeFileConfig) []InsecureSecuritySetti
 			issues = append(issues, InsecureSecuritySetting{
 				Path:   check.path,
 				Label:  check.label,
-				Reason: "仍在使用 config.yaml.example 中的示例默认值",
+				Reason: "still using the example default from config.yaml.example",
 			})
 		}
 	}
@@ -156,8 +156,8 @@ func FindInsecureSecuritySettings(cfg RuntimeFileConfig) []InsecureSecuritySetti
 	if token == exampleAgentToken {
 		issues = append(issues, InsecureSecuritySetting{
 			Path:   "security.agent_registration_token",
-			Label:  "Agent 注册令牌",
-			Reason: "仍在使用 config.yaml.example 中的示例默认值",
+			Label:  "agent registration token",
+			Reason: "still using the example default from config.yaml.example",
 		})
 	}
 

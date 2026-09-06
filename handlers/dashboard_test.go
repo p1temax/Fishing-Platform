@@ -61,7 +61,9 @@ func TestDashboardStatisticsIncludeLocalAndDistributedProjects(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := db.Create(&models.Robot{Name: "robot", CreatedBy: admin.ID}).Error; err != nil {
+	if err := db.Create(&models.MailCampaign{
+		Subject: "dashboard-mail", SmtpServiceID: 1, BodyTemplate: "hi", CreatedBy: admin.ID,
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&models.Message{ProjectID: remote.ID}).Error; err != nil {
@@ -82,7 +84,7 @@ func TestDashboardStatisticsIncludeLocalAndDistributedProjects(t *testing.T) {
 	var result struct {
 		ProjectCount        int64 `json:"projectCount"`
 		RunningProjectCount int64 `json:"runningProjectCount"`
-		RobotCount          int64 `json:"robotCount"`
+		MailCampaignCount   int64 `json:"mailCampaignCount"`
 		MessageCount        int64 `json:"messageCount"`
 		AgentCount          int64 `json:"agentCount"`
 		OnlineAgentCount    int64 `json:"onlineAgentCount"`
@@ -98,8 +100,8 @@ func TestDashboardStatisticsIncludeLocalAndDistributedProjects(t *testing.T) {
 	if result.RunningProjectCount != 2 {
 		t.Fatalf("runningProjectCount = %d, want 2", result.RunningProjectCount)
 	}
-	if result.RobotCount != 1 || result.MessageCount != 1 {
-		t.Fatalf("robotCount/messageCount = %d/%d, want 1/1", result.RobotCount, result.MessageCount)
+	if result.MailCampaignCount != 1 || result.MessageCount != 1 {
+		t.Fatalf("mailCampaignCount/messageCount = %d/%d, want 1/1", result.MailCampaignCount, result.MessageCount)
 	}
 	if result.AgentCount != 2 || result.OnlineAgentCount != 0 || result.OfflineAgentCount != 2 {
 		t.Fatalf("agent counts = %d/%d/%d, want 2/0/2", result.AgentCount, result.OnlineAgentCount, result.OfflineAgentCount)

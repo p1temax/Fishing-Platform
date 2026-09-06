@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FolderKanban, Bot, MessageSquare, PlayCircle, Network } from "lucide-react";
+import { FolderKanban, Mail, MessageSquare, PlayCircle, Network } from "lucide-react";
 import {
   CartesianGrid,
   Line,
@@ -45,7 +45,7 @@ type HostMetricSampleRow = {
 type DashboardStats = {
   projectCount: number;
   runningProjectCount: number;
-  robotCount: number;
+  mailCampaignCount: number;
   messageCount: number;
   agentCount: number;
   onlineAgentCount: number;
@@ -65,7 +65,7 @@ type MetricSample = {
 const emptyStats: DashboardStats = {
   projectCount: 0,
   runningProjectCount: 0,
-  robotCount: 0,
+  mailCampaignCount: 0,
   messageCount: 0,
   agentCount: 0,
   onlineAgentCount: 0,
@@ -381,16 +381,16 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 px-4 pb-1 pt-3">
             <CardTitle className="text-sm font-medium text-slate-600">
-              {t("dashboard.robotCount")}
+              {t("dashboard.mailCampaignCount")}
             </CardTitle>
-            <Bot className="h-4 w-4 text-slate-400" />
+            <Mail className="h-4 w-4 text-slate-400" />
           </CardHeader>
           <CardContent className="px-4 pb-3 pt-0">
             <div className="text-2xl font-semibold">
-              {loading ? "…" : stats.robotCount}
+              {loading ? "…" : stats.mailCampaignCount}
             </div>
             <p className="mt-1 text-xs text-slate-500">
-              {t("dashboard.robotCountSubtext")}
+              {t("dashboard.mailCampaignCountSubtext")}
             </p>
           </CardContent>
         </Card>

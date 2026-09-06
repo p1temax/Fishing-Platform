@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useLocation } from "react-router-dom";
-import { Construction, QrCode, Search } from "lucide-react";
+import { Construction, QrCode } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -14,11 +14,6 @@ const FEATURES: Record<
     icon: React.ComponentType<{ className?: string }>;
   }
 > = {
-  "/workbench/info-gathering": {
-    titleKey: "workbench.infoGathering",
-    descKey: "workbench.infoGatheringDesc",
-    icon: Search,
-  },
   "/workbench/qr-phishing": {
     titleKey: "workbench.qrPhishing",
     descKey: "workbench.qrPhishingDesc",

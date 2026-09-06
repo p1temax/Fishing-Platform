@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ChevronUp, Plus } from "lucide-react";
 import { api } from "@/api";
 import { useI18n } from "@/i18n";
@@ -46,6 +46,7 @@ const selectClass =
 export default function WorkbenchMailPage() {
   const { t, locale } = useI18n();
   const navigate = useNavigate();
+  const location = useLocation();
   const [smtpList, setSmtpList] = useState<SmtpService[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [campaigns, setCampaigns] = useState<MailCampaign[]>([]);
@@ -92,6 +93,17 @@ export default function WorkbenchMailPage() {
   );
   const [isHtml, setIsHtml] = useState(true);
   const [trackOpens, setTrackOpens] = useState(true);
+
+  useEffect(() => {
+    const state = location.state as { recipients?: string[] } | null;
+    const list = state?.recipients;
+    if (!Array.isArray(list) || !list.length) return;
+    const text = list.map((e) => String(e).trim()).filter(Boolean).join("\n");
+    if (!text) return;
+    setRecipients(text);
+    setFormOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.pathname, location.state, navigate]);
 
   const load = useCallback(async () => {
     setLoading(true);

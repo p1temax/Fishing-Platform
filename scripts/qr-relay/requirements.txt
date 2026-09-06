@@ -1,0 +1,5 @@
+mss>=9.0.1
+Pillow>=10.0.0
+pyzbar>=0.1.9
+PyYAML>=6.0.1
+requests>=2.31.0

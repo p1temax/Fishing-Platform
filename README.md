@@ -45,6 +45,8 @@ It ships as **one Go binary** that embeds the production frontend (`frontend/dis
 | **Credential records** | Harvest username / password / captcha (and extras); passwords encrypted at rest; **IP → geo** via embedded QQWry; CSV export; linkable to mail campaigns |
 | **Runtime logs** | Platform container/local logs plus centrally collected agent project logs |
 | **Page Builder** | Library of HTML pages as cards (live thumbnails); **upload**; **mirror URL + AI rewrite** (requires an enabled AI profile); delete |
+| **Info Gathering** | AI **web_search** via generic `POST {base_url}/responses` (user-supplied URL + API key); optional `x_search`; structured contacts with sources; export CSV; hand off to Send Email |
+| **QR Phishing** | Live QR relay: local screen capture (ROI picker + heartbeat) uploads image frames only; stable `/q/{slug}.png`; project HTML placeholders `{{QR_RELAY_URL}}` / `{{QR_RELAY_IMG}}`; SSE live preview, frame history, health badges, rate limit, rotate slug/token |
 | **Send Email** | Bulk campaigns via configured SMTP; HTML/plain; optional open tracking; click tracking with **per-campaign opaque** `/api/<slug>` paths; HTML noise injection; campaign detail (sent / open / click + event list: status, time, email, IP) |
 | **Mail Tracking (System)** | Platform settings: enable tracking, `public_base_url`, HMAC secret, redirect host allow-list (paths are **auto-generated per campaign**, not hand-edited) |
 | **Mail Services (SMTP)** | Multiple SMTP profiles (TLS/SSL), test send, encrypted passwords |
@@ -53,14 +55,11 @@ It ships as **one Go binary** that embeds the production frontend (`frontend/dis
 | **IP Blacklist** | Entries created from captured credentials (not free-form create in UI); enable/disable; applies **host firewall** rules where supported |
 | **Users (admin)** | Create operators; reset password; operators cannot access audit logs or admin-only settings |
 | **Audit Logs (admin)** | Append-only operator action history (no delete) |
-| **AI Settings (admin)** | OpenAI-compatible profiles in DB; only one enabled; used by Page Builder mirror rewrite |
+| **AI Settings (admin)** | User-supplied base URL + API key + model profiles; only one enabled; Page Builder uses `/chat/completions`, Info Gathering uses `/responses` + `web_search` |
 | **Access control** | JWT sessions; optional **platform Basic Auth** gate; ownership scoping for operators |
 | **i18n** | English (default) and Chinese in the UI |
 
-### Not implemented yet (UI placeholders)
 
-- **Workbench → Info Gathering** — coming soon  
-- **Workbench → QR Phishing** — coming soon  
 
 ---
 
@@ -182,8 +181,8 @@ Mapped to the sidebar as shipped:
 | **Projects** | Ready | Overview · Deployments · Logs · Records |
 | **Workbench → Send Email** | Ready | Campaigns + open/click funnel |
 | **Workbench → Page Builder** | Ready | Upload / AI mirror / manage pages |
-| **Workbench → Info Gathering** | Coming soon | Placeholder page |
-| **Workbench → QR Phishing** | Coming soon | Placeholder page |
+| **Workbench → Info Gathering** | Ready | AI web search → structured contacts |
+| **Workbench → QR Phishing** | Ready | Live QR relay, SSE preview, frame history, project bind + `/q/{slug}.png` |
 | **Push Channels** | Ready | Multi-vendor webhooks |
 | **Agents** | Ready | Online capacity & registration |
 | **IP Blacklist** | Ready | From captures → host firewall |
@@ -224,8 +223,15 @@ await fetch('/api/submit', {
 })
 ```
 
-HTML templates may use `{{SUBMIT_URL}}` and `{{REDIRECT_URL}}`.  
+HTML templates may use `{{SUBMIT_URL}}`, `{{REDIRECT_URL}}`, `{{QR_RELAY_URL}}`, and `{{QR_RELAY_IMG}}`.  
 Mail bodies may use `{{email}}`, `{{click_url}}`, `{{open_pixel}}`, `{{landing_url}}`, and related tracking placeholders.
+
+Full placeholder guides:
+
+- Chinese: [`docs/placeholders.zh.md`](docs/placeholders.zh.md)
+- English: [`docs/placeholders.en.md`](docs/placeholders.en.md)
+
+HTTP access logs are written under `data/access-YYYY-MM-DD.log` (daily rotation). Successful fast `/api/dashboard` polls are omitted from the console but still recorded in the file.
 
 ---
 

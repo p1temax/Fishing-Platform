@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"embed"
 	"fmt"
@@ -31,45 +30,77 @@ var frontendFS embed.FS
 //go:embed qqwry.dat
 var qqwryData []byte
 
+//go:embed scripts/qr-relay/qr_relay.py scripts/qr-relay/requirements.txt scripts/qr-relay/README.md scripts/qr-relay/config.example.yaml
+var qrRelayScriptFS embed.FS
+
 func main() {
-	printStartupBanner()
+	handlers.RegisterQrRelayScriptFS(qrRelayScriptFS)
 
 	// Bootstrap runtime configuration.
 	ginMode, err := config.BootstrapRuntimeConfig()
 	if err != nil {
 		log.Fatalf("Failed to bootstrap runtime configuration: %v", err)
 	}
+	utils.PrintAppBanner(utils.AppVersion, config.ServerPort(), ginMode)
 	if !confirmInsecureSecuritySettings(config.InsecureSecuritySettings()) {
 		log.Fatal("Startup aborted because insecure security configuration was not confirmed")
 	}
 	gin.SetMode(ginMode)
 
+	checks := make([]utils.StartupCheck, 0, 10)
+
 	// Initialize encryption
 	encryptionKey := config.EncryptionKey()
 	if err := utils.InitEncryption(encryptionKey); err != nil {
-		log.Printf("Warning: Failed to initialize encryption: %v", err)
+		checks = append(checks, utils.StartupCheck{
+			Name: "Encryption", OK: false, Detail: err.Error(),
+		})
+	} else {
+		checks = append(checks, utils.StartupCheck{
+			Name: "Encryption", OK: true, Detail: "ready",
+		})
 	}
 
 	// Initialize embedded IP location database.
 	if err := utils.InitIPLocationDB(qqwryData); err != nil {
-		log.Printf("Warning: Failed to initialize qqwry IP database: %v", err)
+		checks = append(checks, utils.StartupCheck{
+			Name: "IP geolocation", OK: false, Detail: err.Error(),
+		})
+	} else {
+		checks = append(checks, utils.StartupCheck{
+			Name: "IP geolocation", OK: true, Detail: "ready",
+		})
 	}
 
 	// Initialize database
 	dbPath := config.DatabasePath()
 	if err := config.InitializeDatabase(dbPath); err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		checks = append(checks, utils.StartupCheck{
+			Name: "Database", OK: false, Detail: err.Error(),
+		})
+		utils.PrintStartupChecksPanel("Startup checks", checks)
+		os.Exit(1)
 	}
-
-	// Run database migrations
 	if err := models.AutoMigrate(config.GetDB()); err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
+		checks = append(checks, utils.StartupCheck{
+			Name: "Database", OK: false, Detail: "migrate failed: " + err.Error(),
+		})
+		utils.PrintStartupChecksPanel("Startup checks", checks)
+		os.Exit(1)
 	}
+	checks = append(checks, utils.StartupCheck{
+		Name: "Database", OK: true, Detail: "connected",
+	})
+
 	if err := handlers.SyncEnabledIPBlacklistToHostFirewall(config.GetDB()); err != nil {
-		log.Printf("Warning: Failed to sync IP blacklist to host firewall: %v", err)
+		checks = append(checks, utils.StartupCheck{
+			Name: "IP blacklist sync", OK: false, Detail: err.Error(),
+		})
 	}
 	if _, err := handlers.EnsureMailTrackingSettingForBoot(); err != nil {
-		log.Printf("Warning: mail tracking settings seed failed: %v", err)
+		checks = append(checks, utils.StartupCheck{
+			Name: "Mail tracking", OK: false, Detail: err.Error(),
+		})
 	}
 
 	// Background host metrics sampling (30s interval, 24h retention).
@@ -80,196 +111,222 @@ func main() {
 	// Initialize JWT
 	middleware.InitJWT()
 	if config.JWTSecret() == "" {
-		log.Println("JWT_SECRET is not set; generated an in-memory secret for this process")
+		checks = append(checks, utils.StartupCheck{
+			Name: "JWT secret", OK: true, Detail: "generated in-memory for this process",
+		})
 	}
 
-	// Create default admin user if not exists
-	createDefaultAdmin()
+	checks = append(checks, ensureDefaultAdmin())
+	checks = append(checks, probeDockerTCPPort("127.0.0.1:2375"))
+	checks = append(checks, checkRequiredDockerImage())
 
-	// Probe local Docker TCP endpoint once during startup.
-	probeDockerTCPPort("127.0.0.1:2375")
-	checkRequiredDockerImage()
+	accessLogDir := utils.DefaultAccessLogDir(dbPath)
+	accessLog, accessLogErr := utils.OpenAccessLog(accessLogDir)
+	if accessLogErr != nil {
+		checks = append(checks, utils.StartupCheck{
+			Name: "Access log", OK: false, Detail: accessLogErr.Error(),
+		})
+	} else {
+		defer accessLog.Close()
+		checks = append(checks, utils.StartupCheck{
+			Name: "Access log", OK: true,
+			Detail: accessLog.Path() + " (daily rotate)",
+		})
+	}
 
-	// Initialize Gin router
-	r := gin.Default()
+	// Initialize Gin router (custom access log instead of gin.Default logger).
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(utils.AccessLogMiddleware(accessLog))
 
 	// Configure CORS
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowAllOrigins = true
 	corsConfig.AddAllowHeaders("Authorization", "Content-Type")
 	r.Use(cors.New(corsConfig))
+	// Avoid 301 trailing-slash redirects on API calls: browsers drop Authorization
+	// on cross-origin redirects (e.g. Next dev on :8081 → API on :8000).
+	r.RedirectTrailingSlash = false
+	r.RedirectFixedPath = false
+
+	platformBasicAuth := middleware.RequirePlatformBasicAuth()
 
 	// Public routes
 	public := r.Group("/api/auth")
-	platformBasicAuth := middleware.RequirePlatformBasicAuth()
 	{
-		public.POST("/register/", platformBasicAuth, handlers.Register)
-		public.POST("/login/", platformBasicAuth, handlers.Login)
-		public.POST("/logout/", platformBasicAuth, handlers.Logout)
-		public.POST("/container_token/", handlers.GetContainerToken)
+		both(public, http.MethodPost, "/register/", platformBasicAuth, handlers.Register)
+		both(public, http.MethodPost, "/login/", platformBasicAuth, handlers.Login)
+		both(public, http.MethodPost, "/logout/", platformBasicAuth, handlers.Logout)
+		both(public, http.MethodPost, "/container_token/", handlers.GetContainerToken)
 	}
-
-	// JWT refresh route
-	r.POST("/api/auth/token/refresh/", platformBasicAuth, func(c *gin.Context) {
-		// For simplicity, we'll just generate a new token based on the user
-		// In production, you'd validate the refresh token properly
+	both(r, http.MethodPost, "/api/auth/token/refresh/", platformBasicAuth, func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "Refresh endpoint"})
 	})
 
 	agentPublic := r.Group("/api/agents")
 	{
-		agentPublic.POST("/register/", handlers.RegisterAgent)
-		agentPublic.POST("/heartbeat/", handlers.AgentHeartbeat)
+		both(agentPublic, http.MethodPost, "/register/", handlers.RegisterAgent)
+		both(agentPublic, http.MethodPost, "/heartbeat/", handlers.AgentHeartbeat)
 	}
 
-	// Public mail open/click tracking via opaque /api/<slug> (paths from DB settings).
-	r.GET("/api/:slug", handlers.DispatchMailTracking)
+	// QR relay upload (token auth, image-only) + heartbeat + public image host.
+	both(r, http.MethodPost, "/api/qr-relay/frames/", handlers.UploadQrRelayFrame)
+	both(r, http.MethodPost, "/api/qr-relay/heartbeat/", handlers.HeartbeatQrRelay)
+	r.GET("/q/:slug", handlers.ServeQrRelayImage)
 
 	agentRuntime := r.Group("/api/agent")
 	{
-		agentRuntime.GET("/tasks/lease/", handlers.LeaseAgentTasks)
-		agentRuntime.POST("/tasks/:taskID/start/", handlers.StartAgentTask)
-		agentRuntime.POST("/tasks/:taskID/renew/", handlers.RenewAgentTask)
-		agentRuntime.POST("/tasks/:taskID/complete/", handlers.CompleteAgentTask)
-		agentRuntime.GET("/deployments/:id/artifact/", handlers.DownloadDeploymentArtifact)
-		agentRuntime.POST("/deployments/:id/submit/", handlers.SubmitDeploymentData)
-		agentRuntime.POST("/deployments/:id/logs/", handlers.UploadDeploymentLogs)
+		both(agentRuntime, http.MethodGet, "/tasks/lease/", handlers.LeaseAgentTasks)
+		both(agentRuntime, http.MethodPost, "/tasks/:taskID/start/", handlers.StartAgentTask)
+		both(agentRuntime, http.MethodPost, "/tasks/:taskID/renew/", handlers.RenewAgentTask)
+		both(agentRuntime, http.MethodPost, "/tasks/:taskID/complete/", handlers.CompleteAgentTask)
+		both(agentRuntime, http.MethodGet, "/deployments/:id/artifact/", handlers.DownloadDeploymentArtifact)
+		both(agentRuntime, http.MethodPost, "/deployments/:id/submit/", handlers.SubmitDeploymentData)
+		both(agentRuntime, http.MethodPost, "/deployments/:id/logs/", handlers.UploadDeploymentLogs)
 	}
 
 	// Protected routes
 	protected := r.Group("/api")
 	protected.Use(middleware.AuthMiddleware(), middleware.AuditMiddleware())
 	{
-		// Current user profile
-		protected.GET("/auth/me/", handlers.GetCurrentUser)
+		both(protected, http.MethodGet, "/auth/me/", handlers.GetCurrentUser)
 
-		// Audit logs (admin only; read-only; no delete by design)
 		auditLogs := protected.Group("/")
 		auditLogs.Use(middleware.RequireAdmin())
 		{
-			auditLogs.GET("/audit-logs/", handlers.ListAuditLogs)
-			auditLogs.GET("/audit-logs/actions/", handlers.ListAuditActions)
+			both(auditLogs, http.MethodGet, "/audit-logs/", handlers.ListAuditLogs)
+			both(auditLogs, http.MethodGet, "/audit-logs/actions/", handlers.ListAuditActions)
 		}
 
-		// User management (admin only)
 		users := protected.Group("/users")
 		users.Use(middleware.RequireAdmin())
 		{
-			users.GET("/", handlers.ListUsers)
-			users.POST("/", handlers.CreateUser)
-			users.PUT("/:id/", handlers.UpdateUser)
-			users.POST("/:id/reset-password/", handlers.ResetUserPassword)
-			users.DELETE("/:id/", handlers.DeleteUser)
+			both(users, http.MethodGet, "/", handlers.ListUsers)
+			both(users, http.MethodPost, "/", handlers.CreateUser)
+			both(users, http.MethodPut, "/:id/", handlers.UpdateUser)
+			both(users, http.MethodPost, "/:id/reset-password/", handlers.ResetUserPassword)
+			both(users, http.MethodDelete, "/:id/", handlers.DeleteUser)
 		}
 
-		// AI settings (admin only; used by page mirror rewrite)
 		aiSettings := protected.Group("/ai-settings")
 		aiSettings.Use(middleware.RequireAdmin())
 		{
-			aiSettings.GET("/", handlers.GetAISettings)
-			aiSettings.PUT("/", handlers.UpdateAISettings)
+			both(aiSettings, http.MethodGet, "/", handlers.GetAISettings)
+			both(aiSettings, http.MethodPut, "/", handlers.UpdateAISettings)
 		}
 
-		// Mail tracking settings (admin only; public_base_url + tracking endpoints)
 		mailTracking := protected.Group("/mail-tracking-settings")
 		mailTracking.Use(middleware.RequireAdmin())
 		{
-			mailTracking.GET("/", handlers.GetMailTrackingSettings)
-			mailTracking.PUT("/", handlers.UpdateMailTrackingSettings)
+			both(mailTracking, http.MethodGet, "/", handlers.GetMailTrackingSettings)
+			both(mailTracking, http.MethodPut, "/", handlers.UpdateMailTrackingSettings)
 		}
 
-		// Agents
-		protected.GET("/agents/", handlers.GetAgents)
-		protected.GET("/agents/:id/", handlers.GetAgent)
+		both(protected, http.MethodGet, "/agents/", handlers.GetAgents)
+		both(protected, http.MethodGet, "/agents/:id/", handlers.GetAgent)
 
-		// Robots (operators can manage day-to-day; deletes are admin-only)
-		protected.GET("/robots/", handlers.GetRobots)
-		protected.GET("/robots/:id/", handlers.GetRobot)
-		protected.POST("/robots/", handlers.CreateRobot)
-		protected.PUT("/robots/:id/", handlers.UpdateRobot)
-		protected.POST("/robots/:id/test/", handlers.TestRobot)
-		protected.GET("/robots/:id/push_logs/", handlers.GetRobotPushLogs)
-		protected.POST("/robots/:id/online/", handlers.StartRobot)
-		protected.POST("/robots/:id/offline/", handlers.StopRobot)
-		protected.GET("/robots/:id/messages/", handlers.GetRobotMessages)
-		protected.POST("/robot_push_logs/", handlers.CreateRobotPushLog)
+		both(protected, http.MethodGet, "/robots/", handlers.GetRobots)
+		both(protected, http.MethodGet, "/robots/:id/", handlers.GetRobot)
+		both(protected, http.MethodPost, "/robots/", handlers.CreateRobot)
+		both(protected, http.MethodPut, "/robots/:id/", handlers.UpdateRobot)
+		both(protected, http.MethodPost, "/robots/:id/test/", handlers.TestRobot)
+		both(protected, http.MethodGet, "/robots/:id/push_logs/", handlers.GetRobotPushLogs)
+		both(protected, http.MethodPost, "/robots/:id/online/", handlers.StartRobot)
+		both(protected, http.MethodPost, "/robots/:id/offline/", handlers.StopRobot)
+		both(protected, http.MethodGet, "/robots/:id/messages/", handlers.GetRobotMessages)
+		both(protected, http.MethodPost, "/robot_push_logs/", handlers.CreateRobotPushLog)
 
-		// Projects (operators run jobs; project deletion is admin-only)
-		protected.GET("/projects/", handlers.GetProjects)
-		protected.GET("/projects/:id/", handlers.GetProject)
-		protected.POST("/projects/", handlers.CreateProject)
-		protected.PUT("/projects/:id/", handlers.UpdateProject)
-		protected.POST("/projects/:id/build/", handlers.BuildProject)
-		protected.GET("/projects/:id/build_status/", handlers.BuildStatus)
-		protected.GET("/projects/:id/deployments/", handlers.GetProjectDeployments)
-		protected.POST("/projects/:id/deployments/:deploymentID/:action/", handlers.ControlProjectDeployment)
-		protected.GET("/projects/:id/logs/", handlers.GetProjectLogs)
-		protected.POST("/projects/:id/start_container/", handlers.StartContainer)
-		protected.POST("/projects/:id/stop_container/", handlers.StopContainer)
-		protected.POST("/projects/:id/restart_container/", handlers.RestartContainer)
-		protected.POST("/projects/:id/start_local/", handlers.StartLocalFlask)
-		protected.POST("/projects/:id/stop_local/", handlers.StopLocalFlask)
-		protected.POST("/projects/:id/restart_local/", handlers.RestartLocalFlask)
-		protected.GET("/projects/:id/container_log/", handlers.ContainerLog)
-		protected.GET("/projects/:id/credentials/", handlers.GetProjectCredentials)
+		both(protected, http.MethodGet, "/projects/", handlers.GetProjects)
+		both(protected, http.MethodGet, "/projects/:id/", handlers.GetProject)
+		both(protected, http.MethodPost, "/projects/", handlers.CreateProject)
+		both(protected, http.MethodPut, "/projects/:id/", handlers.UpdateProject)
+		both(protected, http.MethodPost, "/projects/:id/build/", handlers.BuildProject)
+		both(protected, http.MethodGet, "/projects/:id/build_status/", handlers.BuildStatus)
+		both(protected, http.MethodGet, "/projects/:id/deployments/", handlers.GetProjectDeployments)
+		both(protected, http.MethodPost, "/projects/:id/deployments/:deploymentID/:action/", handlers.ControlProjectDeployment)
+		both(protected, http.MethodGet, "/projects/:id/logs/", handlers.GetProjectLogs)
+		both(protected, http.MethodPost, "/projects/:id/start_container/", handlers.StartContainer)
+		both(protected, http.MethodPost, "/projects/:id/stop_container/", handlers.StopContainer)
+		both(protected, http.MethodPost, "/projects/:id/restart_container/", handlers.RestartContainer)
+		both(protected, http.MethodPost, "/projects/:id/start_local/", handlers.StartLocalFlask)
+		both(protected, http.MethodPost, "/projects/:id/stop_local/", handlers.StopLocalFlask)
+		both(protected, http.MethodPost, "/projects/:id/restart_local/", handlers.RestartLocalFlask)
+		both(protected, http.MethodGet, "/projects/:id/container_log/", handlers.ContainerLog)
+		both(protected, http.MethodGet, "/projects/:id/credentials/", handlers.GetProjectCredentials)
 
-		// Messages
-		protected.GET("/messages/", handlers.GetMessages)
-		protected.GET("/messages/:id/", handlers.GetMessage)
-		protected.POST("/messages/", handlers.CreateMessage)
-		protected.PUT("/messages/:id/", handlers.UpdateMessage)
+		both(protected, http.MethodGet, "/messages/", handlers.GetMessages)
+		both(protected, http.MethodGet, "/messages/:id/", handlers.GetMessage)
+		both(protected, http.MethodPost, "/messages/", handlers.CreateMessage)
+		both(protected, http.MethodPut, "/messages/:id/", handlers.UpdateMessage)
 
-		// Credential capture write path (used by runtimes); global credential reads are admin-only
-		protected.POST("/credentials/", handlers.CreateCredential)
-		protected.PUT("/credentials/:id/", handlers.UpdateCredential)
+		both(protected, http.MethodPost, "/credentials/", handlers.CreateCredential)
+		both(protected, http.MethodPut, "/credentials/:id/", handlers.UpdateCredential)
 
-		// IP Blacklist (operators may add/update; deletes are admin-only)
-		protected.GET("/ip-blacklist/", handlers.GetIPBlacklist)
-		protected.GET("/ip-blacklist/:id/", handlers.GetIPBlacklistEntry)
-		protected.POST("/ip-blacklist/", handlers.CreateIPBlacklistEntry)
-		protected.PUT("/ip-blacklist/:id/", handlers.UpdateIPBlacklistEntry)
+		both(protected, http.MethodGet, "/ip-blacklist/", handlers.GetIPBlacklist)
+		both(protected, http.MethodGet, "/ip-blacklist/:id/", handlers.GetIPBlacklistEntry)
+		both(protected, http.MethodPost, "/ip-blacklist/", handlers.CreateIPBlacklistEntry)
+		both(protected, http.MethodPut, "/ip-blacklist/:id/", handlers.UpdateIPBlacklistEntry)
 
-		// SMTP services (operators may use/send; deletes are admin-only)
-		protected.GET("/smtp-services/", handlers.GetSmtpServices)
-		protected.GET("/smtp-services/:id/", handlers.GetSmtpService)
-		protected.POST("/smtp-services/", handlers.CreateSmtpService)
-		protected.PUT("/smtp-services/:id/", handlers.UpdateSmtpService)
-		protected.POST("/smtp-services/:id/test/", handlers.TestSmtpService)
-		protected.POST("/smtp-services/:id/send/", handlers.SendSmtpServiceMail)
+		both(protected, http.MethodGet, "/smtp-services/", handlers.GetSmtpServices)
+		both(protected, http.MethodGet, "/smtp-services/:id/", handlers.GetSmtpService)
+		both(protected, http.MethodPost, "/smtp-services/", handlers.CreateSmtpService)
+		both(protected, http.MethodPut, "/smtp-services/:id/", handlers.UpdateSmtpService)
+		both(protected, http.MethodPost, "/smtp-services/:id/test/", handlers.TestSmtpService)
+		both(protected, http.MethodPost, "/smtp-services/:id/send/", handlers.SendSmtpServiceMail)
 
-		// Mail campaigns (workbench bulk send + tracking)
-		protected.GET("/mail-campaigns/", handlers.GetMailCampaigns)
-		protected.GET("/mail-campaigns/:id/", handlers.GetMailCampaign)
-		protected.POST("/mail-campaigns/", handlers.CreateMailCampaign)
-		protected.GET("/mail-campaigns/:id/recipients/", handlers.GetMailCampaignRecipients)
-		protected.GET("/mail-campaigns/:id/events/", handlers.GetMailCampaignEvents)
+		both(protected, http.MethodGet, "/mail-campaigns/", handlers.GetMailCampaigns)
+		both(protected, http.MethodGet, "/mail-campaigns/:id/", handlers.GetMailCampaign)
+		both(protected, http.MethodPost, "/mail-campaigns/", handlers.CreateMailCampaign)
+		both(protected, http.MethodGet, "/mail-campaigns/:id/recipients/", handlers.GetMailCampaignRecipients)
+		both(protected, http.MethodGet, "/mail-campaigns/:id/events/", handlers.GetMailCampaignEvents)
 
-		// Phishing Pages / page builder
-		protected.GET("/phishing-pages/", handlers.GetPhishingPages)
-		protected.POST("/phishing-pages/mirror/", handlers.MirrorPhishingPage)
-		protected.POST("/phishing-pages/upsert/", handlers.UpsertPhishingPage)
-		protected.GET("/phishing-pages/:id/", handlers.GetPhishingPage)
-		protected.POST("/phishing-pages/", handlers.CreatePhishingPage)
-		protected.PUT("/phishing-pages/:id/", handlers.UpdatePhishingPage)
-		protected.DELETE("/phishing-pages/:id/", handlers.DeletePhishingPage)
+		both(protected, http.MethodGet, "/info-gather-jobs/", handlers.GetInfoGatherJobs)
+		both(protected, http.MethodPost, "/info-gather-jobs/", handlers.CreateInfoGatherJob)
+		both(protected, http.MethodGet, "/info-gather-jobs/:id/", handlers.GetInfoGatherJob)
+		both(protected, http.MethodGet, "/info-gather-jobs/:id/findings/", handlers.GetInfoGatherFindings)
+		both(protected, http.MethodPost, "/info-gather-jobs/:id/retry/", handlers.RetryInfoGatherJob)
+		both(protected, http.MethodDelete, "/info-gather-jobs/:id/", handlers.DeleteInfoGatherJob)
 
-		// Dashboard
-		protected.GET("/dashboard/", handlers.GetStatistics)
+		both(protected, http.MethodGet, "/qr-relays/", handlers.GetQrRelays)
+		both(protected, http.MethodPost, "/qr-relays/", handlers.CreateQrRelay)
+		// Static path before :id
+		both(protected, http.MethodGet, "/qr-relays/script.zip", handlers.DownloadQrRelayScript)
+		both(protected, http.MethodGet, "/qr-relays/:id/", handlers.GetQrRelay)
+		both(protected, http.MethodGet, "/qr-relays/:id/events/", handlers.StreamQrRelayEvents)
+		both(protected, http.MethodGet, "/qr-relays/:id/frames/", handlers.ListQrRelayFrames)
+		both(protected, http.MethodGet, "/qr-relays/:id/frames/:fid/", handlers.ServeQrRelayFrameImage)
+		both(protected, http.MethodPost, "/qr-relays/:id/frames/:fid/promote/", handlers.PromoteQrRelayFrame)
+		both(protected, http.MethodPost, "/qr-relays/:id/rotate-token/", handlers.RotateQrRelayToken)
+		both(protected, http.MethodPost, "/qr-relays/:id/rotate-slug/", handlers.RotateQrRelaySlug)
+		both(protected, http.MethodPost, "/qr-relays/:id/enabled/", handlers.SetQrRelayEnabled)
+		both(protected, http.MethodDelete, "/qr-relays/:id/", handlers.DeleteQrRelay)
 
-		// Destructive / sensitive governance actions (admin only)
+		both(protected, http.MethodGet, "/phishing-pages/", handlers.GetPhishingPages)
+		both(protected, http.MethodPost, "/phishing-pages/mirror/", handlers.MirrorPhishingPage)
+		both(protected, http.MethodPost, "/phishing-pages/upsert/", handlers.UpsertPhishingPage)
+		both(protected, http.MethodGet, "/phishing-pages/:id/", handlers.GetPhishingPage)
+		both(protected, http.MethodPost, "/phishing-pages/", handlers.CreatePhishingPage)
+		both(protected, http.MethodPut, "/phishing-pages/:id/", handlers.UpdatePhishingPage)
+		both(protected, http.MethodDelete, "/phishing-pages/:id/", handlers.DeletePhishingPage)
+
+		both(protected, http.MethodGet, "/dashboard/", handlers.GetStatistics)
+
 		adminOnly := protected.Group("/")
 		adminOnly.Use(middleware.RequireAdmin())
 		{
-			adminOnly.DELETE("/robots/:id/", handlers.DeleteRobot)
-			adminOnly.DELETE("/projects/:id/", handlers.DeleteProject)
-			adminOnly.DELETE("/messages/:id/", handlers.DeleteMessage)
-			adminOnly.GET("/credentials/", handlers.GetCredentials)
-			adminOnly.GET("/credentials/:id/", handlers.GetCredential)
-			adminOnly.DELETE("/credentials/:id/", handlers.DeleteCredential)
-			adminOnly.DELETE("/ip-blacklist/:id/", handlers.DeleteIPBlacklistEntry)
-			adminOnly.DELETE("/smtp-services/:id/", handlers.DeleteSmtpService)
+			both(adminOnly, http.MethodDelete, "/robots/:id/", handlers.DeleteRobot)
+			both(adminOnly, http.MethodDelete, "/projects/:id/", handlers.DeleteProject)
+			both(adminOnly, http.MethodDelete, "/messages/:id/", handlers.DeleteMessage)
+			both(adminOnly, http.MethodGet, "/credentials/", handlers.GetCredentials)
+			both(adminOnly, http.MethodGet, "/credentials/:id/", handlers.GetCredential)
+			both(adminOnly, http.MethodDelete, "/credentials/:id/", handlers.DeleteCredential)
+			both(adminOnly, http.MethodDelete, "/ip-blacklist/:id/", handlers.DeleteIPBlacklistEntry)
+			both(adminOnly, http.MethodDelete, "/smtp-services/:id/", handlers.DeleteSmtpService)
 		}
 	}
+
+	// Mail tracking catch-all MUST be last among /api GET routes.
+	r.GET("/api/:slug", handlers.DispatchMailTracking)
 
 	// Serve static frontend files using StaticFS
 	frontendDist, err := fs.Sub(frontendFS, "frontend/dist")
@@ -348,28 +405,37 @@ func main() {
 
 	// Start server
 	port := fmt.Sprintf("%d", config.ServerPort())
+	checks = append(checks, utils.StartupCheck{
+		Name: "Listen", OK: true, Detail: ":" + port,
+	})
+	utils.PrintStartupChecksPanel("Startup checks", checks)
 
-	log.Printf("Starting server on port %s", port)
 	if err := r.Run(":" + port); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		utils.PrintStartupChecksPanel("Startup checks", []utils.StartupCheck{{
+			Name: "Listen", OK: false, Detail: err.Error(),
+		}})
+		os.Exit(1)
 	}
 }
 
-func printStartupBanner() {
-	fmt.Print(`
- /$$$$$$$$ /$$           /$$                         /$$             /$$      /$$$$$$                                 
-| $$_____/|__/          | $$                        | $$            | $$     /$$__  $$                                
-| $$       /$$  /$$$$$$$| $$$$$$$           /$$$$$$ | $$  /$$$$$$  /$$$$$$  | $$  \__//$$$$$$   /$$$$$$  /$$$$$$/$$$$ 
-| $$$$$   | $$ /$$_____/| $$__  $$ /$$$$$$ /$$__  $$| $$ |____  $$|_  $$_/  | $$$$   /$$__  $$ /$$__  $$| $$_  $$_  $$
-| $$__/   | $$|  $$$$$$ | $$  \ $$|______/| $$  \ $$| $$  /$$$$$$$  | $$    | $$_/  | $$  \ $$| $$  \__/| $$ \ $$ \ $$
-| $$      | $$ \____  $$| $$  | $$        | $$  | $$| $$ /$$__  $$  | $$ /$$| $$    | $$  | $$| $$      | $$ | $$ | $$
-| $$      | $$ /$$$$$$$/| $$  | $$        | $$$$$$$/| $$|  $$$$$$$  |  $$$$/| $$    |  $$$$$$/| $$      | $$ | $$ | $$
-|__/      |__/|_______/ |__/  |__/        | $$____/ |__/ \_______/   \___/  |__/     \______/ |__/      |__/ |__/ |__/
-                                          | $$                                                                        
-                                          | $$                                                                        
-                                          |__/           	Version: 1.0.0  
-									                                                                                                                                                                                                                                                                                                                                                                                                                
-`)
+// both registers a route with and without a trailing slash.
+// RedirectTrailingSlash is disabled to avoid cross-origin auth loss, so every
+// API path must accept both forms (Next.js proxy may normalize slashes).
+func both(r gin.IRoutes, method, path string, handlers ...gin.HandlerFunc) {
+	if path == "/" || path == "" {
+		r.Handle(method, "/", handlers...)
+		r.Handle(method, "", handlers...)
+		return
+	}
+	r.Handle(method, path, handlers...)
+	if strings.HasSuffix(path, "/") {
+		alt := strings.TrimSuffix(path, "/")
+		if alt != "" {
+			r.Handle(method, alt, handlers...)
+		}
+		return
+	}
+	r.Handle(method, path+"/", handlers...)
 }
 
 func confirmInsecureSecuritySettings(issues []config.InsecureSecuritySetting) bool {
@@ -377,45 +443,47 @@ func confirmInsecureSecuritySettings(issues []config.InsecureSecuritySetting) bo
 		return true
 	}
 
-	fmt.Println()
-	fmt.Println("============================================================")
-	fmt.Println("安全配置提醒：检测到以下敏感配置仍为默认值或为空")
-	fmt.Println("============================================================")
+	items := make([]utils.StartupIssue, 0, len(issues))
 	for _, issue := range issues {
-		fmt.Printf("- %s (%s): %s\n", issue.Path, issue.Label, issue.Reason)
+		items = append(items, utils.StartupIssue{
+			Path:   issue.Path,
+			Label:  issue.Label,
+			Reason: issue.Reason,
+		})
 	}
-	fmt.Println()
-	fmt.Println("建议立即修改 config.yaml 中的上述配置，使用足够长的随机字符串。")
-	fmt.Println("继续运行会降低平台安全性，并可能导致 token、凭据加密或 Flask 回连认证存在风险。")
-	fmt.Print("如果确认仍要继续启动，请输入 y 后回车：")
+	utils.PrintStartupWarningPanel(
+		"Security configuration warning",
+		"The following sensitive settings are still default or empty:",
+		items,
+		"Update these values in config.yaml with long random secrets before production use. Continuing with weak defaults may put tokens, credential encryption, and Flask callback auth at risk.",
+	)
 
-	reader := bufio.NewReader(os.Stdin)
-	answer, err := reader.ReadString('\n')
-	if err != nil && strings.TrimSpace(answer) == "" {
-		fmt.Println()
-		fmt.Println("未读取到确认输入，已取消启动。")
+	if !utils.AskYesNo("Continue startup anyway? [y/N]: ") {
+		utils.PrintStartupCancelled("Startup cancelled.")
 		return false
 	}
-
-	return strings.ToLower(strings.TrimSpace(answer)) == "y"
+	return true
 }
 
-func probeDockerTCPPort(address string) {
+func probeDockerTCPPort(address string) utils.StartupCheck {
 	conn, err := net.DialTimeout("tcp", address, 3*time.Second)
 	if err != nil {
-		log.Printf("[Docker Probe] Docker TCP endpoint %s is unreachable during startup: %s", address, err.Error())
-		return
+		return utils.StartupCheck{
+			Name: "Docker endpoint", OK: false, Detail: address + " unreachable",
+		}
 	}
-
 	_ = conn.Close()
-	log.Printf("[Docker Probe] Docker TCP endpoint %s is reachable during startup", address)
+	return utils.StartupCheck{
+		Name: "Docker endpoint", OK: true, Detail: address + " reachable",
+	}
 }
 
-func checkRequiredDockerImage() {
+func checkRequiredDockerImage() utils.StartupCheck {
 	dockerClient, err := utils.NewDockerClient()
 	if err != nil {
-		log.Printf("[Docker Image Check] 无法连接 Docker，跳过基础镜像检查：%v", err)
-		return
+		return utils.StartupCheck{
+			Name: "Docker image", OK: false, Detail: "cannot connect to Docker, skipped",
+		}
 	}
 	defer dockerClient.Close()
 
@@ -423,45 +491,44 @@ func checkRequiredDockerImage() {
 	exists, err := dockerClient.ImageExists(ctx, utils.RequiredProjectBaseImage)
 	cancel()
 	if err != nil {
-		log.Printf("[Docker Image Check] 检查基础镜像失败：%v", err)
-		return
+		return utils.StartupCheck{
+			Name: "Docker image", OK: false, Detail: err.Error(),
+		}
 	}
 	if exists {
-		log.Printf("[Docker Image Check] 已检测到基础镜像 %s", utils.RequiredProjectBaseImage)
-		return
+		return utils.StartupCheck{
+			Name: "Docker image", OK: true, Detail: utils.RequiredProjectBaseImage + " present",
+		}
 	}
 
-	fmt.Println()
-	fmt.Println("============================================================")
-	fmt.Printf("缺少项目构建所需的 Docker 基础镜像：%s\n", utils.RequiredProjectBaseImage)
-	fmt.Printf("可手动执行：docker pull %s\n", utils.RequiredProjectBaseImage)
-	fmt.Println("============================================================")
-	fmt.Print("是否现在下载该镜像？请输入 y 后回车确认：")
-
-	reader := bufio.NewReader(os.Stdin)
-	answer, readErr := reader.ReadString('\n')
-	if readErr != nil && strings.TrimSpace(answer) == "" {
-		fmt.Println()
-		log.Printf("[Docker Image Check] 未读取到确认输入，已跳过镜像下载")
-		return
-	}
-	if strings.ToLower(strings.TrimSpace(answer)) != "y" {
-		log.Printf("[Docker Image Check] 用户未确认，已跳过镜像下载")
-		return
+	utils.PrintStartupInfoPanel(
+		"Docker base image missing",
+		[]string{
+			fmt.Sprintf("Required image: %s", utils.RequiredProjectBaseImage),
+			fmt.Sprintf("Manual pull: docker pull %s", utils.RequiredProjectBaseImage),
+			"Project Docker builds need this image on the host.",
+		},
+	)
+	if !utils.AskYesNo("Download this image now? [y/N]: ") {
+		return utils.StartupCheck{
+			Name: "Docker image", OK: false, Detail: "missing; download skipped",
+		}
 	}
 
-	log.Printf("[Docker Image Check] 开始下载 %s", utils.RequiredProjectBaseImage)
 	pullCtx, pullCancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer pullCancel()
 	if err := dockerClient.PullImage(pullCtx, utils.RequiredProjectBaseImage, os.Stdout); err != nil {
-		log.Printf("[Docker Image Check] 镜像下载失败：%v", err)
-		return
+		return utils.StartupCheck{
+			Name: "Docker image", OK: false, Detail: "pull failed: " + err.Error(),
+		}
 	}
-	log.Printf("[Docker Image Check] 基础镜像 %s 下载完成", utils.RequiredProjectBaseImage)
+	return utils.StartupCheck{
+		Name: "Docker image", OK: true, Detail: utils.RequiredProjectBaseImage + " ready",
+	}
 }
 
-// createDefaultAdmin creates a default admin user if it doesn't exist
-func createDefaultAdmin() {
+// ensureDefaultAdmin creates a default admin user if missing and returns a startup check row.
+func ensureDefaultAdmin() utils.StartupCheck {
 	db := config.GetDB()
 
 	var admin models.User
@@ -469,18 +536,13 @@ func createDefaultAdmin() {
 		if models.NormalizeRole(admin.Role) != models.UserRoleAdmin {
 			_ = db.Model(&admin).Update("role", models.UserRoleAdmin).Error
 		}
-		log.Println("Admin user already exists")
-		return
+		return utils.StartupCheck{Name: "Admin user", OK: true, Detail: "ready"}
 	}
 
-	// Generate a secure password
 	password := utils.GenerateSecurePassword(12)
-
-	// Hash password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		log.Printf("Failed to hash admin password: %v", err)
-		return
+		return utils.StartupCheck{Name: "Admin user", OK: false, Detail: "hash failed: " + err.Error()}
 	}
 
 	admin = models.User{
@@ -488,30 +550,27 @@ func createDefaultAdmin() {
 		Password: string(hashedPassword),
 		Role:     models.UserRoleAdmin,
 	}
-
 	if err := db.Create(&admin).Error; err != nil {
-		log.Printf("Failed to create admin user: %v", err)
-		return
+		return utils.StartupCheck{Name: "Admin user", OK: false, Detail: "create failed: " + err.Error()}
 	}
 
-	// Save password to file
 	dbPath := config.DatabasePath()
 	dataDir := dbPath[:strings.LastIndex(dbPath, "/")]
 	if dataDir == "" {
 		dataDir = "."
 	}
-
 	passwordFile := dataDir + "/admin_password.txt"
 	content := fmt.Sprintf("Fishing Platform Admin Credentials\n================================\nUsername: admin\nPassword: %s\nGenerated: %s\n\nIMPORTANT: Please save this password and delete this file after logging in.\n",
 		password, time.Now().Format("2006-01-02 15:04:05"))
 
 	if err := os.WriteFile(passwordFile, []byte(content), 0600); err != nil {
-		log.Printf("Failed to save password file: %v", err)
-	} else {
-		log.Printf("✅ Admin user created successfully!")
-		log.Printf("Username: admin")
-		log.Printf("Password: %s", password)
-		log.Printf("Password saved to: %s", passwordFile)
-		log.Printf("⚠️  Please save this password and delete the file after logging in!")
+		return utils.StartupCheck{
+			Name: "Admin user", OK: true,
+			Detail: fmt.Sprintf("created; password=%s (file save failed)", password),
+		}
+	}
+	return utils.StartupCheck{
+		Name: "Admin user", OK: true,
+		Detail: fmt.Sprintf("created; password saved to %s", passwordFile),
 	}
 }

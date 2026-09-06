@@ -25,9 +25,9 @@ func GetStatistics(c *gin.Context) {
 		return
 	}
 
-	var robotCount int64
-	if err := scopeByOwner(db.Model(&models.Robot{}), user).Count(&robotCount).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve robot count"})
+	var mailCampaignCount int64
+	if err := scopeByOwner(db.Model(&models.MailCampaign{}), user).Count(&mailCampaignCount).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve mail campaign count"})
 		return
 	}
 
@@ -103,7 +103,7 @@ func GetStatistics(c *gin.Context) {
 
 	statistics := gin.H{
 		"projectCount":          projectCount,
-		"robotCount":            robotCount,
+		"mailCampaignCount":     mailCampaignCount,
 		"messageCount":          messageCount,
 		"agentCount":            agentCount,
 		"onlineAgentCount":      onlineAgentCount,
