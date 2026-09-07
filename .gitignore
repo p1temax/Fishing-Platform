@@ -65,3 +65,6 @@ README.assets/image-*.png
 # Local QR relay script secrets
 scripts/qr-relay/config.yaml
 scripts/qr-relay/.venv/
+
+# Local frontend design backups
+backups/

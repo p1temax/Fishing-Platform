@@ -13,9 +13,13 @@ import {
 } from "recharts";
 import { api } from "@/api";
 import { useI18n } from "@/i18n";
+import { Badge } from "@/components/ui/badge";
 import {
   Card,
+  CardAction,
   CardContent,
+  CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -146,21 +150,23 @@ function MetricLineChart({
   const latest = data.length ? data[data.length - 1][dataKey] : null;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col rounded-sm border bg-white px-3 py-2">
-      <div className="mb-1 flex shrink-0 items-center justify-between gap-2">
+    <div className="flex min-h-0 flex-1 flex-col rounded-xl border bg-gradient-to-t from-primary/5 to-card px-4 py-3 shadow-sm">
+      <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
         <div className="flex items-baseline gap-2">
-          <div className="text-xs text-slate-500">{title}</div>
+          <div className="text-xs text-muted-foreground">{title}</div>
           <div className="text-base font-semibold tabular-nums">
             {latest === null || latest === undefined
               ? "—"
               : `${latest.toFixed(1)}%`}
           </div>
         </div>
-        <div className="truncate text-[11px] text-slate-400">{currentLabel}</div>
+        <div className="truncate text-[11px] text-muted-foreground">
+          {currentLabel}
+        </div>
       </div>
       <div className="min-h-0 w-full flex-1 overflow-visible">
         {data.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-xs text-slate-400">
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
             {emptyText}
           </div>
         ) : (
@@ -328,151 +334,148 @@ export default function DashboardPage() {
     [hm],
   );
 
+  const cardShell =
+    "bg-gradient-to-t from-primary/5 to-card shadow-sm";
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
-      <div className="shrink-0">
-        <h1 className="text-xl font-semibold">{t("nav.dashboard")}</h1>
-        <p className="text-sm text-slate-500">{t("dashboard.subtitle")}</p>
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden py-4 md:gap-6 md:py-6">
+      <div className="shrink-0 px-4 lg:px-6">
+        <h1 className="text-xl font-semibold tracking-tight">
+          {t("nav.dashboard")}
+        </h1>
+        <p className="text-sm text-muted-foreground">{t("dashboard.subtitle")}</p>
       </div>
 
       {error ? (
-        <p className="shrink-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p className="mx-4 shrink-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 lg:mx-6">
           {error}
         </p>
       ) : null}
 
-      <div className="grid shrink-0 grid-cols-2 gap-3 xl:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 px-4 pb-1 pt-3">
-            <CardTitle className="text-sm font-medium text-slate-600">
-              {t("dashboard.projectSummary")}
+      <div className="grid shrink-0 grid-cols-1 gap-4 px-4 sm:grid-cols-2 xl:grid-cols-4 lg:px-6">
+        <Card className={cardShell}>
+          <CardHeader>
+            <CardDescription>{t("dashboard.projectSummary")}</CardDescription>
+            <CardTitle className="text-2xl font-semibold tabular-nums">
+              {loading
+                ? "…"
+                : formatRatio(stats.runningProjectCount, stats.projectCount)}
             </CardTitle>
-            <FolderKanban className="h-4 w-4 text-slate-400" />
+            <CardAction>
+              <Badge variant="outline" className="gap-1">
+                <FolderKanban className="h-3.5 w-3.5" />
+                {ratioPercent(stats.runningProjectCount, stats.projectCount)}%
+              </Badge>
+            </CardAction>
           </CardHeader>
-          <CardContent className="px-4 pb-3 pt-0">
-            <div className="flex items-end gap-2">
-              <div className="text-2xl font-semibold tabular-nums">
-                {loading ? "…" : stats.runningProjectCount}
-              </div>
-              <div className="mb-0.5 text-sm text-slate-500">
-                / {loading ? "…" : stats.projectCount}
-              </div>
+          <CardFooter className="flex-col items-start gap-1.5 border-0 p-6 pt-0 text-sm">
+            <div className="line-clamp-1 flex gap-2 font-medium">
+              <PlayCircle className="h-4 w-4 text-emerald-600" />
+              {t("dashboard.projectSummarySubtext", {
+                running: stats.runningProjectCount,
+                total: stats.projectCount,
+              })}
             </div>
-            <div className="mt-1 flex items-center gap-2">
-              <PlayCircle className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
-              <p className="text-xs text-slate-500">
-                {t("dashboard.projectSummarySubtext", {
-                  running: stats.runningProjectCount,
-                  total: stats.projectCount,
-                })}
-              </p>
-            </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-sm bg-slate-100">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
               <div
-                className="h-full rounded-sm bg-emerald-600 transition-all"
+                className="h-full rounded-full bg-emerald-600 transition-all"
                 style={{
                   width: `${ratioPercent(stats.runningProjectCount, stats.projectCount)}%`,
                 }}
               />
             </div>
-          </CardContent>
+          </CardFooter>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 px-4 pb-1 pt-3">
-            <CardTitle className="text-sm font-medium text-slate-600">
-              {t("dashboard.mailCampaignCount")}
-            </CardTitle>
-            <Mail className="h-4 w-4 text-slate-400" />
-          </CardHeader>
-          <CardContent className="px-4 pb-3 pt-0">
-            <div className="text-2xl font-semibold">
+        <Card className={cardShell}>
+          <CardHeader>
+            <CardDescription>{t("dashboard.mailCampaignCount")}</CardDescription>
+            <CardTitle className="text-2xl font-semibold tabular-nums">
               {loading ? "…" : stats.mailCampaignCount}
-            </div>
-            <p className="mt-1 text-xs text-slate-500">
+            </CardTitle>
+            <CardAction>
+              <Badge variant="outline" className="gap-1">
+                <Mail className="h-3.5 w-3.5" />
+                Mail
+              </Badge>
+            </CardAction>
+          </CardHeader>
+          <CardFooter className="flex-col items-start gap-1.5 border-0 p-6 pt-0 text-sm">
+            <div className="text-muted-foreground">
               {t("dashboard.mailCampaignCountSubtext")}
-            </p>
-          </CardContent>
+            </div>
+          </CardFooter>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 px-4 pb-1 pt-3">
-            <CardTitle className="text-sm font-medium text-slate-600">
-              {t("dashboard.messageCount")}
-            </CardTitle>
-            <MessageSquare className="h-4 w-4 text-slate-400" />
-          </CardHeader>
-          <CardContent className="px-4 pb-3 pt-0">
-            <div className="text-2xl font-semibold">
+        <Card className={cardShell}>
+          <CardHeader>
+            <CardDescription>{t("dashboard.messageCount")}</CardDescription>
+            <CardTitle className="text-2xl font-semibold tabular-nums">
               {loading ? "…" : stats.messageCount}
-            </div>
-            <p className="mt-1 text-xs text-slate-500">
+            </CardTitle>
+            <CardAction>
+              <Badge variant="outline" className="gap-1">
+                <MessageSquare className="h-3.5 w-3.5" />
+                Msg
+              </Badge>
+            </CardAction>
+          </CardHeader>
+          <CardFooter className="flex-col items-start gap-1.5 border-0 p-6 pt-0 text-sm">
+            <div className="text-muted-foreground">
               {t("dashboard.messageCountSubtext")}
-            </p>
-          </CardContent>
+            </div>
+          </CardFooter>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 px-4 pb-1 pt-3">
-            <CardTitle className="text-sm font-medium text-slate-600">
-              {t("dashboard.agentOverview")}
+        <Card className={cardShell}>
+          <CardHeader>
+            <CardDescription>{t("dashboard.agentOverview")}</CardDescription>
+            <CardTitle className="text-2xl font-semibold tabular-nums">
+              {loading
+                ? "…"
+                : formatRatio(stats.onlineAgentCount, stats.agentCount)}
             </CardTitle>
-            <Network className="h-4 w-4 text-slate-400" />
+            <CardAction>
+              <Badge variant="outline" className="gap-1">
+                <Network className="h-3.5 w-3.5" />
+                {ratioPercent(stats.onlineAgentCount, stats.agentCount)}%
+              </Badge>
+            </CardAction>
           </CardHeader>
-          <CardContent className="space-y-2 px-4 pb-3 pt-0">
-            <div className="flex items-end justify-between gap-2">
-              <div className="text-2xl font-semibold tabular-nums">
-                {loading
-                  ? "…"
-                  : formatRatio(stats.onlineAgentCount, stats.agentCount)}
-              </div>
-              <div className="mb-0.5 text-xs text-slate-500">
-                {t("dashboard.agentOnlineRatio")}
-              </div>
+          <CardFooter className="flex-col items-start gap-1.5 border-0 p-6 pt-0 text-sm">
+            <div className="text-muted-foreground">
+              {t("dashboard.agentOnlineRatio")} · {t("dashboard.agentOffline")}:{" "}
+              {stats.offlineAgentCount} · {t("dashboard.activeDeployments")}:{" "}
+              {stats.activeDeploymentCount}
             </div>
-            <div className="h-1.5 overflow-hidden rounded-sm bg-slate-100">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
               <div
-                className="h-full rounded-sm bg-slate-700 transition-all"
+                className="h-full rounded-full bg-slate-700 transition-all"
                 style={{
                   width: `${ratioPercent(stats.onlineAgentCount, stats.agentCount)}%`,
                 }}
               />
             </div>
-            <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-              <div>
-                {t("dashboard.agentOffline")}：
-                <span className="font-semibold">{stats.offlineAgentCount}</span>
-              </div>
-              <div>
-                {t("dashboard.activeDeployments")}：
-                <span className="font-semibold">
-                  {stats.activeDeploymentCount}
-                </span>
-              </div>
-            </div>
-          </CardContent>
+          </CardFooter>
         </Card>
       </div>
 
       {hasHost ? (
-        <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <CardHeader className="flex shrink-0 flex-row items-center justify-between gap-3 space-y-0 px-4 py-2.5">
-            <div>
-              <CardTitle className="text-base">{t("dashboard.hostStatus")}</CardTitle>
-              <p className="text-xs text-slate-500">
-                {t("dashboard.performanceTrend")} · {t("dashboard.collectedAt")}：
-                {formatTime(hm.collected_at)}
-              </p>
-              <p className="text-xs text-slate-400">{t("dashboard.hostHistoryHint")}</p>
-            </div>
-            <div className="hidden text-xs text-slate-500 lg:block">
+        <Card className="mx-4 flex min-h-0 flex-1 flex-col overflow-hidden lg:mx-6">
+          <CardHeader className="shrink-0 gap-1 border-b py-4">
+            <CardDescription>{t("dashboard.hostStatus")}</CardDescription>
+            <CardTitle className="text-base">
+              {t("dashboard.performanceTrend")}
+            </CardTitle>
+            <div className="text-xs text-muted-foreground">
+              {t("dashboard.collectedAt")}：{formatTime(hm.collected_at)} ·{" "}
               {t("dashboard.host")}：{hm.hostname || "-"} ·{" "}
               {t("dashboard.system")}：{formatOS(hm.os, hm.arch)} ·{" "}
               {t("dashboard.uptime")}：{formatUptime(hm.uptime_seconds)}
             </div>
           </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden px-4 pb-3 pt-0">
-            <div className="flex min-h-0 flex-1 flex-col gap-2">
+          <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-4">
+            <div className="flex min-h-0 flex-1 flex-col gap-3">
               <MetricLineChart
                 title={t("dashboard.cpuUsage")}
                 dataKey="cpu"
@@ -489,17 +492,6 @@ export default function DashboardPage() {
                 emptyText={t("dashboard.noSamplesYet")}
                 currentLabel={`${formatMemory(hm.memory_used_mb)} / ${formatMemory(hm.memory_total_mb)}`}
               />
-            </div>
-            <div className="grid shrink-0 gap-1 text-xs text-slate-600 sm:grid-cols-2 lg:hidden">
-              <div>
-                {t("dashboard.host")}：{hm.hostname || "-"}
-              </div>
-              <div>
-                {t("dashboard.system")}：{formatOS(hm.os, hm.arch)}
-              </div>
-              <div>
-                {t("dashboard.uptime")}：{formatUptime(hm.uptime_seconds)}
-              </div>
             </div>
           </CardContent>
         </Card>

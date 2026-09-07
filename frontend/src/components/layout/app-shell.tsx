@@ -6,13 +6,12 @@ import {
   LogOut,
   Globe,
   Mail,
-  Menu,
   Network,
   ShieldBan,
   FolderKanban,
   Bot,
   Settings,
-  ChevronDown,
+  ChevronRight,
   Send,
   Wrench,
   LayoutTemplate,
@@ -22,6 +21,7 @@ import {
   BrainCircuit,
   Search,
   Link2,
+  PanelLeft,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/i18n";
@@ -29,7 +29,20 @@ import { isAdminRole, useAuthStore } from "@/auth/auth-store";
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { BrandLogo } from "@/components/brand-logo";
+import { Separator } from "@/components/ui/separator";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 type NavItem = {
   href: string;
@@ -66,6 +79,47 @@ function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+function NavLink({
+  item,
+  collapsed,
+  indented = false,
+}: {
+  item: NavItem;
+  collapsed: boolean;
+  indented?: boolean;
+}) {
+  const { t } = useI18n();
+  const location = useLocation();
+  const active = isActivePath(location.pathname, item.href);
+  const Icon = item.icon;
+  const label = t(item.key);
+
+  const link = (
+    <Link
+      to={item.href}
+      className={cn(
+        "flex items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors",
+        indented && !collapsed && "pl-8",
+        collapsed && "justify-center px-0",
+        active
+          ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+          : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+      )}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      {!collapsed && <span className="truncate">{label}</span>}
+    </Link>
+  );
+
+  if (!collapsed) return link;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      <TooltipContent side="right">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { t, locale, setLocale } = useI18n();
   const location = useLocation();
@@ -73,6 +127,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
   const isAdmin = isAdminRole(user?.role);
+  const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(false);
 
   const visiblePrimaryNav = useMemo(
@@ -93,7 +148,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     [location.pathname, visibleSystemNav],
   );
   const [workbenchOpen, setWorkbenchOpen] = useState(true);
-  // Keep system group expanded by default so nested entries stay discoverable.
   const [systemOpen, setSystemOpen] = useState(true);
 
   useEffect(() => {
@@ -104,14 +158,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (systemActive) setSystemOpen(true);
   }, [systemActive]);
 
-  // Narrow viewports keep the icon rail only so page content can fill the screen.
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)");
-    const apply = () => setCollapsed(mq.matches);
-    apply();
-    mq.addEventListener("change", apply);
-    return () => mq.removeEventListener("change", apply);
-  }, []);
+    if (isMobile) setCollapsed(true);
+  }, [isMobile]);
 
   const handleLogout = async () => {
     try {
@@ -123,156 +172,243 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     navigate("/login", { replace: true });
   };
 
-  const renderLink = (item: NavItem, indented = false) => {
-    const active = isActivePath(location.pathname, item.href);
-    const Icon = item.icon;
-    return (
-      <Link
-        key={item.href}
-        to={item.href}
-        title={collapsed ? t(item.key) : undefined}
-        className={cn(
-          "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-          indented && !collapsed && "pl-9",
-          active ? "bg-white/15" : "hover:bg-white/10",
-        )}
-      >
-        <Icon className="h-4 w-4 shrink-0" />
-        {!collapsed && <span>{t(item.key)}</span>}
-      </Link>
-    );
-  };
+  const pageTitle = useMemo(() => {
+    const all = [...primaryNav, ...workbenchNav, ...systemNav];
+    const hit = all.find((item) => isActivePath(location.pathname, item.href));
+    return hit ? t(hit.key) : t("app.title");
+  }, [location.pathname, t]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50">
-      <aside
-        className={cn(
-          "flex flex-col bg-slate-900 text-white transition-all",
-          collapsed ? "w-16" : "w-56",
-        )}
-      >
-        <div className="flex h-14 items-center gap-2 border-b border-white/10 px-4 font-semibold">
-          <BrandLogo size={22} fill="#fff" title={t("app.title")} />
-          {!collapsed && <span className="truncate">{t("app.title")}</span>}
-        </div>
-        <nav className="flex-1 space-y-1 overflow-y-auto p-2">
-          {visiblePrimaryNav.map((item) => renderLink(item))}
-
-          <div className="pt-1">
-            <button
-              type="button"
-              title={collapsed ? t("nav.workbench") : undefined}
-              onClick={() => {
-                if (collapsed) {
-                  setCollapsed(false);
-                  setWorkbenchOpen(true);
-                  return;
-                }
-                setWorkbenchOpen((v) => !v);
-              }}
-              className={cn(
-                "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                workbenchActive ? "bg-white/10" : "hover:bg-white/10",
-              )}
-            >
-              <Wrench className="h-4 w-4 shrink-0" />
-              {!collapsed && (
-                <>
-                  <span className="flex-1 text-left">{t("nav.workbench")}</span>
-                  <ChevronDown
-                    className={cn(
-                      "h-4 w-4 shrink-0 transition-transform",
-                      workbenchOpen ? "rotate-0" : "-rotate-90",
-                    )}
-                  />
-                </>
-              )}
-            </button>
-
-            {(workbenchOpen || collapsed) && (
-              <div className="mt-1 space-y-1">
-                {workbenchNav.map((item) => renderLink(item, true))}
-              </div>
+    <TooltipProvider delayDuration={0}>
+      <div className="flex min-h-svh w-full bg-background">
+        <aside
+          className={cn(
+            "sticky top-0 z-20 flex h-svh shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200",
+            collapsed ? "w-[var(--sidebar-width-icon)]" : "w-[var(--sidebar-width)]",
+          )}
+        >
+          <div
+            className={cn(
+              "flex h-[var(--header-height)] items-center gap-2 border-b border-sidebar-border px-3",
+              collapsed && "justify-center px-2",
             )}
-          </div>
-
-          <div className="pt-1">
-            <button
-              type="button"
-              title={collapsed ? t("nav.system") : undefined}
-              onClick={() => {
-                if (collapsed) {
-                  setCollapsed(false);
-                  setSystemOpen(true);
-                  return;
-                }
-                setSystemOpen((v) => !v);
-              }}
-              className={cn(
-                "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                systemActive ? "bg-white/10" : "hover:bg-white/10",
-              )}
-            >
-              <Settings className="h-4 w-4 shrink-0" />
-              {!collapsed && (
-                <>
-                  <span className="flex-1 text-left">{t("nav.system")}</span>
-                  <ChevronDown
-                    className={cn(
-                      "h-4 w-4 shrink-0 transition-transform",
-                      systemOpen ? "rotate-0" : "-rotate-90",
-                    )}
-                  />
-                </>
-              )}
-            </button>
-
-            {(systemOpen || collapsed) && (
-              <div className="mt-1 space-y-1">
-                {visibleSystemNav.map((item) => renderLink(item, true))}
-              </div>
-            )}
-          </div>
-        </nav>
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b bg-white px-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setCollapsed((v) => !v)}
-            aria-label="Toggle sidebar"
           >
-            <Menu className="h-4 w-4" />
-          </Button>
-          <div className="flex items-center gap-2">
+            <BrandLogo size={22} fill="#fff" title={t("app.title")} />
+            {!collapsed && (
+              <div className="min-w-0 leading-tight">
+                <div className="truncate text-sm font-semibold">{t("app.title")}</div>
+                <div className="truncate text-[11px] text-sidebar-foreground/60">
+                  {user?.role === "operator"
+                    ? t("users.roleOperator")
+                    : t("app.admin")}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <nav className="flex-1 space-y-4 overflow-y-auto px-2 py-3">
+            <div className="space-y-1">
+              {!collapsed && (
+                <div className="px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-sidebar-foreground/50">
+                  Platform
+                </div>
+              )}
+              {visiblePrimaryNav.map((item) => (
+                <NavLink key={item.href} item={item} collapsed={collapsed} />
+              ))}
+            </div>
+
+            <Collapsible
+              open={collapsed ? true : workbenchOpen}
+              onOpenChange={setWorkbenchOpen}
+              className="space-y-1"
+            >
+              {!collapsed ? (
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors",
+                      workbenchActive
+                        ? "bg-sidebar-accent/70 text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                    )}
+                  >
+                    <Wrench className="h-4 w-4 shrink-0" />
+                    <span className="flex-1 text-left">{t("nav.workbench")}</span>
+                    <ChevronRight
+                      className={cn(
+                        "h-4 w-4 transition-transform",
+                        workbenchOpen && "rotate-90",
+                      )}
+                    />
+                  </button>
+                </CollapsibleTrigger>
+              ) : (
+                <div className="px-0">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-center rounded-md py-2 text-sidebar-foreground/80 hover:bg-sidebar-accent"
+                        onClick={() => {
+                          setCollapsed(false);
+                          setWorkbenchOpen(true);
+                        }}
+                      >
+                        <Wrench className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">{t("nav.workbench")}</TooltipContent>
+                  </Tooltip>
+                </div>
+              )}
+              <CollapsibleContent className="space-y-1">
+                {workbenchNav.map((item) => (
+                  <NavLink
+                    key={item.href}
+                    item={item}
+                    collapsed={collapsed}
+                    indented
+                  />
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
+
+            <Collapsible
+              open={collapsed ? true : systemOpen}
+              onOpenChange={setSystemOpen}
+              className="space-y-1"
+            >
+              {!collapsed ? (
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors",
+                      systemActive
+                        ? "bg-sidebar-accent/70 text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                    )}
+                  >
+                    <Settings className="h-4 w-4 shrink-0" />
+                    <span className="flex-1 text-left">{t("nav.system")}</span>
+                    <ChevronRight
+                      className={cn(
+                        "h-4 w-4 transition-transform",
+                        systemOpen && "rotate-90",
+                      )}
+                    />
+                  </button>
+                </CollapsibleTrigger>
+              ) : (
+                <div className="px-0">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-center rounded-md py-2 text-sidebar-foreground/80 hover:bg-sidebar-accent"
+                        onClick={() => {
+                          setCollapsed(false);
+                          setSystemOpen(true);
+                        }}
+                      >
+                        <Settings className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">{t("nav.system")}</TooltipContent>
+                  </Tooltip>
+                </div>
+              )}
+              <CollapsibleContent className="space-y-1">
+                {visibleSystemNav.map((item) => (
+                  <NavLink
+                    key={item.href}
+                    item={item}
+                    collapsed={collapsed}
+                    indented
+                  />
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
+          </nav>
+
+          <div className="border-t border-sidebar-border p-2">
+            {!collapsed ? (
+              <div className="flex items-center gap-2 rounded-md px-2 py-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-accent text-xs font-semibold">
+                  {(user?.username || "A").slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">
+                    {user?.username || t("app.admin")}
+                  </div>
+                  <div className="truncate text-[11px] text-sidebar-foreground/60">
+                    {user?.role === "operator"
+                      ? t("users.roleOperator")
+                      : t("app.admin")}
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                  onClick={handleLogout}
+                  aria-label={t("app.logout")}
+                >
+                  <LogOut className="h-4 w-4" />
+                </Button>
+              </div>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="w-full text-sidebar-foreground hover:bg-sidebar-accent"
+                    onClick={handleLogout}
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">{t("app.logout")}</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </aside>
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="sticky top-0 z-10 flex h-[var(--header-height)] items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setLocale(locale === "zh" ? "en" : "zh")}
-              aria-label={t(
-                locale === "zh"
-                  ? "locale.switchToEnglish"
-                  : "locale.switchToChinese",
-              )}
+              onClick={() => setCollapsed((v) => !v)}
+              aria-label="Toggle sidebar"
             >
-              <Globe className="h-4 w-4" />
+              <PanelLeft className="h-4 w-4" />
             </Button>
-            <span className="text-sm text-slate-600">
-              {user?.username || t("app.admin")}
-              {user?.role === "operator" ? ` (${t("users.roleOperator")})` : ""}
-            </span>
-            <Button variant="ghost" size="sm" onClick={handleLogout}>
-              <LogOut className="h-4 w-4" />
-              {t("app.logout")}
-            </Button>
-          </div>
-        </header>
-        <main className="flex min-h-0 flex-1 flex-col overflow-auto p-3 md:p-6">
-          {children}
-        </main>
+            <Separator orientation="vertical" className="mr-1 h-4" />
+            <div className="text-sm font-medium">{pageTitle}</div>
+            <div className="ml-auto flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setLocale(locale === "zh" ? "en" : "zh")}
+                aria-label={t(
+                  locale === "zh"
+                    ? "locale.switchToEnglish"
+                    : "locale.switchToChinese",
+                )}
+              >
+                <Globe className="h-4 w-4" />
+              </Button>
+            </div>
+          </header>
+          <main className="flex min-h-0 flex-1 flex-col overflow-auto">
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }

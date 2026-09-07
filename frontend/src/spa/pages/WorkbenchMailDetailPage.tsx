@@ -107,7 +107,7 @@ export default function WorkbenchMailDetailPage() {
 
   if (!campaign) {
     return (
-      <div className="space-y-3">
+      <div className="space-y-3 p-4 md:p-6">
         <Link to="/workbench/mail" className="text-sm text-slate-500 hover:text-slate-800">
           ← {t("workbench.campaigns")}
         </Link>
@@ -122,7 +122,7 @@ export default function WorkbenchMailDetailPage() {
       : t("workbench.na");
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 p-4 md:p-6">
       <div>
         <Link
           to="/workbench/mail"
