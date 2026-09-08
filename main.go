@@ -213,6 +213,7 @@ func main() {
 		{
 			both(aiSettings, http.MethodGet, "/", handlers.GetAISettings)
 			both(aiSettings, http.MethodPut, "/", handlers.UpdateAISettings)
+			both(aiSettings, http.MethodPost, "/test/", handlers.TestAISettings)
 		}
 
 		mailTracking := protected.Group("/mail-tracking-settings")
@@ -303,6 +304,7 @@ func main() {
 
 		both(protected, http.MethodGet, "/phishing-pages/", handlers.GetPhishingPages)
 		both(protected, http.MethodPost, "/phishing-pages/mirror/", handlers.MirrorPhishingPage)
+		both(protected, http.MethodPost, "/phishing-pages/rewrite-upload/", handlers.RewriteUploadPhishingPage)
 		both(protected, http.MethodPost, "/phishing-pages/upsert/", handlers.UpsertPhishingPage)
 		both(protected, http.MethodGet, "/phishing-pages/:id/", handlers.GetPhishingPage)
 		both(protected, http.MethodPost, "/phishing-pages/", handlers.CreatePhishingPage)

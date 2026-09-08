@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -13,41 +15,47 @@ import (
 	"fishing-platform-backend/models"
 	"fishing-platform-backend/utils"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
-type mirrorPageRequest struct {
-	URL         string `json:"url" binding:"required"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	SubmitURL   string `json:"submit_url"`
-	RedirectURL string `json:"redirect_url"`
+type rewriteUploadRequest struct {
+	Name         string `json:"name" binding:"required"`
+	HTML         string `json:"html" binding:"required"`
+	Description  string `json:"description"`
+	URL          string `json:"url"`
+	SubmitURL    string `json:"submit_url"`
+	RedirectURL  string `json:"redirect_url"`
+	OriginalHost string `json:"original_host"`
 }
 
-type mirrorProgressEvent struct {
-	Stage       string      `json:"stage"`
-	Percent     int         `json:"percent,omitempty"`
-	Message     string      `json:"message,omitempty"`
-	Error       string      `json:"error,omitempty"`
-	StageFailed string      `json:"stage_failed,omitempty"`
-	Detail      interface{} `json:"detail,omitempty"`
-	Page        interface{} `json:"page,omitempty"`
-}
-
-// MirrorPhishingPage fetches a URL, rewrites login submit via AI, and saves a phishing page.
-// Progress is streamed as SSE events so the UI can show real stages.
-func MirrorPhishingPage(c *gin.Context) {
+// RewriteUploadPhishingPage AI-rewrites uploaded HTML then upserts the phishing page.
+// Progress is streamed as SSE events (same shape as URL mirror).
+func RewriteUploadPhishingPage(c *gin.Context) {
 	user, ok := currentUserOrAbort(c)
 	if !ok {
 		return
 	}
 
-	var req mirrorPageRequest
+	var req rewriteUploadRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "url is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name and html are required"})
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	html := strings.TrimSpace(req.HTML)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Page name is required"})
+		return
+	}
+	if html == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "HTML content is required"})
+		return
+	}
+	if len(html) > 30<<20 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "HTML files cannot exceed 30 MB"})
 		return
 	}
 
-	// AI connectivity is checked in System → AI Settings; mirror only requires an enabled profile.
 	profile, apiKey, active := ActiveAIConfig()
 	if !active {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No AI model is enabled. Open System → AI Settings to configure and test one."})
@@ -84,11 +92,7 @@ func MirrorPhishingPage(c *gin.Context) {
 		flusher.Flush()
 		return true
 	}
-
 	emit := func(ev mirrorProgressEvent) bool {
-		if c.Request.Context().Err() != nil {
-			return false
-		}
 		raw, err := json.Marshal(ev)
 		if err != nil {
 			return false
@@ -109,6 +113,13 @@ func MirrorPhishingPage(c *gin.Context) {
 		submitURL = utils.DefaultMirrorSubmitURL
 	}
 	redirectURL := strings.TrimSpace(req.RedirectURL)
+	pageURL := strings.TrimSpace(req.URL)
+	originalHost := strings.TrimSpace(req.OriginalHost)
+	if originalHost == "" && pageURL != "" {
+		if parsed, err := url.Parse(pageURL); err == nil {
+			originalHost = parsed.Host
+		}
+	}
 
 	timeout := time.Duration(profile.TimeoutSec) * time.Second
 	if timeout <= 0 {
@@ -117,7 +128,6 @@ func MirrorPhishingPage(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout+45*time.Second)
 	defer cancel()
 
-	// Keepalive pings while AI may take a long time.
 	pingStop := make(chan struct{})
 	defer close(pingStop)
 	go func() {
@@ -135,35 +145,22 @@ func MirrorPhishingPage(c *gin.Context) {
 		}
 	}()
 
-	if !emit(mirrorProgressEvent{Stage: "fetching", Percent: 20, Message: "Fetching target page"}) {
-		return
-	}
-	rawHTML, finalURL, err := utils.FetchURLHTML(ctx, req.URL, 30*time.Second)
-	if err != nil {
-		fail("fetching", "Failed to fetch page: "+err.Error())
-		return
-	}
-
-	originalHost := ""
-	if finalURL != nil {
-		originalHost = finalURL.Host
-	}
 	if !emit(mirrorProgressEvent{
 		Stage:   "preparing",
-		Percent: 35,
-		Message: "Preparing HTML for AI",
+		Percent: 20,
+		Message: "Preparing uploaded HTML for AI",
 		Detail: map[string]interface{}{
 			"host":  originalHost,
-			"bytes": len(rawHTML),
+			"bytes": len(html),
 		},
 	}) {
 		return
 	}
-	aiHTML := utils.StripHeavyBase64DataURIs(rawHTML)
+	aiHTML := utils.StripHeavyBase64DataURIs(html)
 
 	if !emit(mirrorProgressEvent{
 		Stage:   "rewriting",
-		Percent: 45,
+		Percent: 40,
 		Message: "AI rewriting login form",
 		Detail: map[string]interface{}{
 			"model": profile.Model,
@@ -183,7 +180,7 @@ func MirrorPhishingPage(c *gin.Context) {
 		fail("rewriting", "AI rewrite failed: "+err.Error())
 		return
 	}
-	if !emit(mirrorProgressEvent{Stage: "rewriting", Percent: 85, Message: "AI rewrite finished"}) {
+	if !emit(mirrorProgressEvent{Stage: "rewriting", Percent: 80, Message: "AI rewrite finished"}) {
 		return
 	}
 
@@ -195,26 +192,46 @@ func MirrorPhishingPage(c *gin.Context) {
 		return
 	}
 
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		if finalURL != nil && finalURL.Host != "" {
-			name = finalURL.Host
-		} else {
-			name = "Mirrored page"
-		}
-	}
-	pageURL := strings.TrimSpace(req.URL)
-	if finalURL != nil {
-		pageURL = finalURL.String()
-	}
 	desc := strings.TrimSpace(req.Description)
 	if desc == "" {
-		desc = "Mirrored from " + pageURL
+		desc = "Uploaded HTML (AI rewritten)"
 	}
 
-	if !emit(mirrorProgressEvent{Stage: "saving", Percent: 95, Message: "Saving mirrored page"}) {
+	if !emit(mirrorProgressEvent{Stage: "saving", Percent: 95, Message: "Saving rewritten page"}) {
 		return
 	}
+
+	db := config.GetDB()
+	overwritten := false
+	var existing models.PhishingPage
+	findErr := db.Where("created_by = ? AND LOWER(name) = LOWER(?)", user.ID, name).
+		First(&existing).Error
+	if findErr == nil {
+		existing.Name = name
+		if pageURL != "" {
+			existing.URL = pageURL
+		}
+		existing.Description = desc
+		existing.Html = rewritten
+		if err := db.Save(&existing).Error; err != nil {
+			fail("saving", "Failed to update phishing page")
+			return
+		}
+		overwritten = true
+		_ = emit(mirrorProgressEvent{
+			Stage:   "done",
+			Percent: 100,
+			Message: "Page rewritten and saved",
+			Detail:  map[string]interface{}{"overwritten": true},
+			Page:    existing,
+		})
+		return
+	}
+	if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+		fail("saving", "Failed to look up phishing page")
+		return
+	}
+
 	page := models.PhishingPage{
 		Name:        name,
 		URL:         pageURL,
@@ -222,16 +239,15 @@ func MirrorPhishingPage(c *gin.Context) {
 		Html:        rewritten,
 		CreatedBy:   user.ID,
 	}
-	db := config.GetDB()
 	if err := db.Create(&page).Error; err != nil {
-		fail("saving", "Failed to save mirrored page")
+		fail("saving", "Failed to save phishing page")
 		return
 	}
-
 	_ = emit(mirrorProgressEvent{
 		Stage:   "done",
 		Percent: 100,
-		Message: "Page mirrored successfully",
+		Message: "Page rewritten and saved",
+		Detail:  map[string]interface{}{"overwritten": overwritten},
 		Page:    page,
 	})
 }

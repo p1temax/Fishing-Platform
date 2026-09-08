@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Globe } from "lucide-react";
+import { Languages } from "lucide-react";
 import { api } from "@/api";
 import { useAuthStore } from "@/auth/auth-store";
 import { useI18n } from "@/i18n";
@@ -59,24 +59,23 @@ export default function LoginPage() {
           locale === "zh" ? "locale.switchToEnglish" : "locale.switchToChinese",
         )}
       >
-        <Globe className="h-4 w-4" />
+        <Languages className="h-4 w-4" />
       </Button>
 
-      {/* Width scales with viewport: ~92vw, capped between phone and large desktop */}
-      <div className="w-full max-w-[min(92vw,28rem)] md:max-w-[min(92vw,56rem)] xl:max-w-[min(88vw,64rem)]">
+      {/* Adaptive but capped smaller: phone ~24rem, desktop ~42–48rem */}
+      <div className="flex w-full max-w-[min(92vw,24rem)] flex-col gap-4 md:max-w-[min(90vw,42rem)] lg:max-w-[min(86vw,48rem)]">
         <Card className="overflow-hidden p-0 shadow-md">
           <CardContent
             className={cn(
               "grid p-0 md:grid-cols-2",
-              // Height follows viewport on desktop so the panel neither dwarfs nor shrinks awkwardly
-              "md:min-h-[min(32rem,72svh)] lg:min-h-[min(34rem,70svh)]",
+              "md:min-h-[min(26rem,58svh)] lg:min-h-[min(28rem,55svh)]",
             )}
           >
             <form
-              className="flex flex-col justify-center p-5 sm:p-6 md:px-8 md:py-8 lg:px-10 lg:py-9"
+              className="flex flex-col justify-center p-5 sm:p-6 md:px-7 md:py-7"
               onSubmit={onSubmit}
             >
-              <div className="mx-auto flex w-full max-w-md flex-col gap-4 sm:gap-5 md:gap-6">
+              <div className="mx-auto flex w-full max-w-sm flex-col gap-4 sm:gap-5">
                 <div className="flex flex-col items-center gap-2 text-center">
                   <h1 className="flex items-center gap-2 text-xl font-bold sm:text-2xl">
                     <BrandLogo size={28} fill="#0f172a" title={t("app.title")} />
@@ -87,44 +86,43 @@ export default function LoginPage() {
                   </p>
                 </div>
 
-                <div className="grid gap-2">
-                  <Label htmlFor="username">{t("login.username")}</Label>
-                  <Input
-                    id="username"
-                    className="h-9 sm:h-10"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder={t("login.username")}
-                    autoComplete="username"
-                    required
-                  />
+                {/* Larger spacing between username / password / submit */}
+                <div className="flex flex-col gap-6 sm:gap-7">
+                  <div className="grid gap-2">
+                    <Label htmlFor="username">{t("login.username")}</Label>
+                    <Input
+                      id="username"
+                      className="h-9"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder={t("login.username")}
+                      autoComplete="username"
+                      required
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="password">{t("login.password")}</Label>
+                    <Input
+                      id="password"
+                      type="password"
+                      className="h-9"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder={t("login.password")}
+                      autoComplete="current-password"
+                      required
+                    />
+                  </div>
+
+                  {error ? (
+                    <p className="text-sm text-destructive">{error}</p>
+                  ) : null}
+
+                  <Button type="submit" className="h-9 w-full" disabled={loading}>
+                    {loading ? "…" : t("login.submit")}
+                  </Button>
                 </div>
-
-                <div className="grid gap-2">
-                  <Label htmlFor="password">{t("login.password")}</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    className="h-9 sm:h-10"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder={t("login.password")}
-                    autoComplete="current-password"
-                    required
-                  />
-                </div>
-
-                {error ? (
-                  <p className="text-sm text-destructive">{error}</p>
-                ) : null}
-
-                <Button
-                  type="submit"
-                  className="h-9 w-full sm:h-10"
-                  disabled={loading}
-                >
-                  {loading ? "…" : t("login.submit")}
-                </Button>
               </div>
             </form>
 
@@ -138,6 +136,10 @@ export default function LoginPage() {
             </div>
           </CardContent>
         </Card>
+
+        <p className="px-2 text-center text-xs text-muted-foreground sm:text-sm">
+          {t("app.subtitle")}
+        </p>
       </div>
     </div>
   );

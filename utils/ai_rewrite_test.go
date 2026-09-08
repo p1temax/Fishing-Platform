@@ -47,6 +47,25 @@ func TestNormalizeAIHTMLOutput(t *testing.T) {
 	}
 }
 
+func TestNormalizeOpenAICompatibleBaseURL(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"https://api.x.ai/v1", "https://api.x.ai/v1"},
+		{"https://api.x.ai/v1/", "https://api.x.ai/v1"},
+		{"https://open.bigmodel.cn/api/paas/v4/chat/completions", "https://open.bigmodel.cn/api/paas/v4"},
+		{"https://open.bigmodel.cn/api/paas/v4/chat/completions/", "https://open.bigmodel.cn/api/paas/v4"},
+		{"https://api.openai.com/v1/responses", "https://api.openai.com/v1"},
+		{"https://api.openai.com/v1/completions", "https://api.openai.com/v1"},
+		{"  https://api.x.ai/v1/CHAT/COMPLETIONS  ", "https://api.x.ai/v1"},
+	}
+	for _, tc := range cases {
+		if got := NormalizeOpenAICompatibleBaseURL(tc.in); got != tc.want {
+			t.Fatalf("NormalizeOpenAICompatibleBaseURL(%q)=%q want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestExtractAIErrorMessage(t *testing.T) {
 	if got := extractAIErrorMessage([]byte(`"bad key"`)); got != "bad key" {
 		t.Fatalf("string error: %q", got)

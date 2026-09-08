@@ -9,8 +9,19 @@ import {
   useRef,
   useState,
 } from "react";
-import { Download, FileCode2, LayoutTemplate, Trash2, Upload } from "lucide-react";
+import {
+  Check,
+  Circle,
+  Download,
+  FileCode2,
+  LayoutTemplate,
+  Loader2,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import { api } from "@/api";
+import { getStoredToken } from "@/auth/auth-store";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -18,6 +29,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { FileUpload } from "@/components/ui/file-upload";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -54,6 +66,113 @@ type PageSummary = {
   created_at?: string;
   updated_at?: string;
 };
+
+const MIRROR_STAGES = [
+  "fetching",
+  "preparing",
+  "rewriting",
+  "validating",
+  "saving",
+] as const;
+
+const UPLOAD_REWRITE_STAGES = [
+  "preparing",
+  "rewriting",
+  "validating",
+  "saving",
+] as const;
+
+type MirrorStage = (typeof MIRROR_STAGES)[number];
+type UploadRewriteStage = (typeof UPLOAD_REWRITE_STAGES)[number];
+
+type MirrorProgressEvent = {
+  stage: string;
+  percent?: number;
+  message?: string;
+  error?: string;
+  stage_failed?: string;
+  detail?: {
+    model?: string;
+    host?: string;
+    bytes?: number;
+    overwritten?: boolean;
+  };
+  page?: PageSummary & { html?: string };
+};
+
+type MirrorStepStatus = "pending" | "active" | "done" | "failed";
+
+function mirrorStageLabelKey(stage: MirrorStage): string {
+  switch (stage) {
+    case "fetching":
+      return "pageBuilder.mirrorStageFetching";
+    case "preparing":
+      return "pageBuilder.mirrorStagePreparing";
+    case "rewriting":
+      return "pageBuilder.mirrorStageRewriting";
+    case "validating":
+      return "pageBuilder.mirrorStageValidating";
+    case "saving":
+      return "pageBuilder.mirrorStageSaving";
+  }
+}
+
+function uploadRewriteStageLabelKey(stage: UploadRewriteStage): string {
+  switch (stage) {
+    case "preparing":
+      return "pageBuilder.uploadStagePreparing";
+    case "rewriting":
+      return "pageBuilder.uploadStageRewriting";
+    case "validating":
+      return "pageBuilder.uploadStageValidating";
+    case "saving":
+      return "pageBuilder.uploadStageSaving";
+  }
+}
+
+function stageIndexIn<T extends string>(stages: readonly T[], stage: string): number {
+  return stages.indexOf(stage as T);
+}
+
+async function consumeMirrorProgressStream(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (ev: MirrorProgressEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    if (signal.aborted) {
+      try {
+        await reader.cancel();
+      } catch {
+        /* ignore */
+      }
+      throw new DOMException("Aborted", "AbortError");
+    }
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() || "";
+    for (const chunk of chunks) {
+      const lines = chunk.split("\n");
+      let eventName = "message";
+      let data = "";
+      for (const line of lines) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        if (line.startsWith("data:")) data += line.slice(5).trim();
+      }
+      if (eventName !== "progress" || !data) continue;
+      try {
+        onEvent(JSON.parse(data) as MirrorProgressEvent);
+      } catch {
+        /* ignore malformed */
+      }
+    }
+  }
+}
 
 function safeHtmlFilename(name: string, id: number) {
   const base = name
@@ -200,6 +319,17 @@ export default function WorkbenchPageBuilderPage() {
   const [mirrorOpen, setMirrorOpen] = useState(false);
   const [mirroring, setMirroring] = useState(false);
   const [mirrorError, setMirrorError] = useState("");
+  const [mirrorPercent, setMirrorPercent] = useState(0);
+  const [mirrorActiveStage, setMirrorActiveStage] = useState<MirrorStage | null>(
+    null,
+  );
+  const [mirrorFailedStage, setMirrorFailedStage] = useState<string | null>(
+    null,
+  );
+  const [mirrorStatusMessage, setMirrorStatusMessage] = useState("");
+  const [mirrorDone, setMirrorDone] = useState(false);
+  const mirrorAbortRef = useRef<AbortController | null>(null);
+  const mirrorActiveStageRef = useRef<MirrorStage | null>(null);
   const [mirrorForm, setMirrorForm] = useState({
     url: "",
     name: "",
@@ -207,15 +337,106 @@ export default function WorkbenchPageBuilderPage() {
     redirect_url: "",
   });
 
+  const resetMirrorProgress = useCallback(() => {
+    setMirrorPercent(0);
+    setMirrorActiveStage(null);
+    mirrorActiveStageRef.current = null;
+    setMirrorFailedStage(null);
+    setMirrorStatusMessage("");
+    setMirrorDone(false);
+    setMirrorError("");
+  }, []);
+
+  const setActiveMirrorStage = (stage: MirrorStage) => {
+    mirrorActiveStageRef.current = stage;
+    setMirrorActiveStage(stage);
+  };
+
+  const mirrorStepStatus = useCallback(
+    (stage: MirrorStage): MirrorStepStatus => {
+      if (mirrorFailedStage === stage) return "failed";
+      if (mirrorDone) return "done";
+      if (!mirrorActiveStage && !mirroring) return "pending";
+      const activeIdx = mirrorActiveStage
+        ? stageIndexIn(MIRROR_STAGES, mirrorActiveStage)
+        : -1;
+      const idx = stageIndexIn(MIRROR_STAGES, stage);
+      if (mirrorFailedStage) {
+        const failedIdx = stageIndexIn(MIRROR_STAGES, mirrorFailedStage);
+        if (failedIdx >= 0) {
+          if (idx < failedIdx) return "done";
+          if (idx === failedIdx) return "failed";
+          return "pending";
+        }
+      }
+      if (idx < activeIdx) return "done";
+      if (idx === activeIdx) return mirroring ? "active" : "done";
+      return "pending";
+    },
+    [mirrorActiveStage, mirrorDone, mirrorFailedStage, mirroring],
+  );
+
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const uploadLockRef = useRef(false);
   const [uploadError, setUploadError] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadAiRewrite, setUploadAiRewrite] = useState(true);
+  const [uploadPercent, setUploadPercent] = useState(0);
+  const [uploadActiveStage, setUploadActiveStage] =
+    useState<UploadRewriteStage | null>(null);
+  const [uploadFailedStage, setUploadFailedStage] = useState<string | null>(
+    null,
+  );
+  const [uploadStatusMessage, setUploadStatusMessage] = useState("");
+  const [uploadDone, setUploadDone] = useState(false);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const uploadActiveStageRef = useRef<UploadRewriteStage | null>(null);
   const [uploadForm, setUploadForm] = useState({
     name: "",
     description: "",
+    submit_url: "/api/submit",
+    redirect_url: "",
   });
+
+  const resetUploadProgress = useCallback(() => {
+    setUploadPercent(0);
+    setUploadActiveStage(null);
+    uploadActiveStageRef.current = null;
+    setUploadFailedStage(null);
+    setUploadStatusMessage("");
+    setUploadDone(false);
+    setUploadError("");
+  }, []);
+
+  const setActiveUploadStage = (stage: UploadRewriteStage) => {
+    uploadActiveStageRef.current = stage;
+    setUploadActiveStage(stage);
+  };
+
+  const uploadStepStatus = useCallback(
+    (stage: UploadRewriteStage): MirrorStepStatus => {
+      if (uploadFailedStage === stage) return "failed";
+      if (uploadDone) return "done";
+      if (!uploadActiveStage && !uploading) return "pending";
+      const activeIdx = uploadActiveStage
+        ? stageIndexIn(UPLOAD_REWRITE_STAGES, uploadActiveStage)
+        : -1;
+      const idx = stageIndexIn(UPLOAD_REWRITE_STAGES, stage);
+      if (uploadFailedStage) {
+        const failedIdx = stageIndexIn(UPLOAD_REWRITE_STAGES, uploadFailedStage);
+        if (failedIdx >= 0) {
+          if (idx < failedIdx) return "done";
+          if (idx === failedIdx) return "failed";
+          return "pending";
+        }
+      }
+      if (idx < activeIdx) return "done";
+      if (idx === activeIdx) return uploading ? "active" : "done";
+      return "pending";
+    },
+    [uploadActiveStage, uploadDone, uploadFailedStage, uploading],
+  );
 
   const willOverwrite = useMemo(() => {
     const name = uploadForm.name.trim().toLowerCase();
@@ -288,10 +509,30 @@ export default function WorkbenchPageBuilderPage() {
   };
 
   const openUpload = () => {
+    uploadAbortRef.current?.abort();
+    uploadAbortRef.current = null;
     setUploadOpen(true);
-    setUploadError("");
+    setUploading(false);
+    resetUploadProgress();
     setUploadFile(null);
-    setUploadForm({ name: "", description: "" });
+    setUploadAiRewrite(true);
+    setUploadForm({
+      name: "",
+      description: "",
+      submit_url: "/api/submit",
+      redirect_url: "",
+    });
+  };
+
+  const closeUploadDialog = () => {
+    if (uploading) {
+      uploadAbortRef.current?.abort();
+    }
+    setUploadOpen(false);
+    setUploading(false);
+    resetUploadProgress();
+    uploadAbortRef.current = null;
+    uploadLockRef.current = false;
   };
 
   const onUploadFileChange = (file: File | null) => {
@@ -328,34 +569,159 @@ export default function WorkbenchPageBuilderPage() {
     }
     uploadLockRef.current = true;
     setUploading(true);
-    setUploadError("");
+    resetUploadProgress();
+
     try {
       const html = await uploadFile.text();
       if (!html.trim()) {
         setUploadError(t("pageBuilder.downloadEmpty"));
         return;
       }
-      const { data } = await api.upsertPhishingPage({
-        name,
-        html,
-        description: uploadForm.description.trim() || undefined,
+
+      if (!uploadAiRewrite) {
+        const { data } = await api.upsertPhishingPage({
+          name,
+          html,
+          description: uploadForm.description.trim() || undefined,
+        });
+        setToast(
+          data?.overwritten
+            ? t("pageBuilder.uploadOverwritten")
+            : t("pageBuilder.uploadSuccess"),
+        );
+        setUploadOpen(false);
+        setUploadFile(null);
+        setUploadForm({
+          name: "",
+          description: "",
+          submit_url: "/api/submit",
+          redirect_url: "",
+        });
+        fetchPages();
+        return;
+      }
+
+      uploadAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      uploadAbortRef.current = ctrl;
+      setActiveUploadStage("preparing");
+      setUploadPercent(10);
+
+      const token = getStoredToken();
+      const res = await fetch("/api/phishing-pages/rewrite-upload/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          name,
+          html,
+          description: uploadForm.description.trim() || undefined,
+          submit_url: uploadForm.submit_url.trim() || "/api/submit",
+          redirect_url: uploadForm.redirect_url.trim() || undefined,
+        }),
+        signal: ctrl.signal,
       });
-      setToast(
-        data?.overwritten
-          ? t("pageBuilder.uploadOverwritten")
-          : t("pageBuilder.uploadSuccess"),
+
+      if (!res.ok || !res.body) {
+        let msg = t("pageBuilder.uploadFailed");
+        try {
+          const data = (await res.json()) as { error?: string };
+          if (data?.error) msg = data.error;
+        } catch {
+          /* ignore */
+        }
+        setUploadError(msg);
+        return;
+      }
+
+      let finished = false;
+      let overwritten = false;
+      await consumeMirrorProgressStream(
+        res.body,
+        (ev) => {
+          if (typeof ev.percent === "number") {
+            setUploadPercent(Math.max(0, Math.min(100, ev.percent)));
+          }
+          if (ev.message) setUploadStatusMessage(ev.message);
+          if (ev.detail?.overwritten) overwritten = true;
+
+          if (ev.stage === "failed") {
+            finished = true;
+            const failedAt =
+              ev.stage_failed || uploadActiveStageRef.current || "preparing";
+            setUploadFailedStage(failedAt);
+            if (UPLOAD_REWRITE_STAGES.includes(failedAt as UploadRewriteStage)) {
+              setActiveUploadStage(failedAt as UploadRewriteStage);
+            }
+            setUploadError(
+              ev.error || ev.message || t("pageBuilder.uploadFailed"),
+            );
+            return;
+          }
+
+          if (ev.stage === "done") {
+            finished = true;
+            setUploadDone(true);
+            setUploadPercent(100);
+            setActiveUploadStage("saving");
+            setToast(
+              overwritten
+                ? t("pageBuilder.uploadOverwritten")
+                : t("pageBuilder.uploadRewriteSuccess"),
+            );
+            setTimeout(() => {
+              setUploadOpen(false);
+              resetUploadProgress();
+              setUploadFile(null);
+              setUploadForm({
+                name: "",
+                description: "",
+                submit_url: "/api/submit",
+                redirect_url: "",
+              });
+              fetchPages();
+            }, 600);
+            return;
+          }
+
+          if (UPLOAD_REWRITE_STAGES.includes(ev.stage as UploadRewriteStage)) {
+            setActiveUploadStage(ev.stage as UploadRewriteStage);
+          }
+        },
+        ctrl.signal,
       );
-      setUploadOpen(false);
-      setUploadFile(null);
-      setUploadForm({ name: "", description: "" });
-      fetchPages();
+
+      if (!finished && !ctrl.signal.aborted) {
+        setUploadError(t("pageBuilder.mirrorStreamFailed"));
+        setUploadFailedStage(uploadActiveStageRef.current || "preparing");
+      }
     } catch (err) {
-      const ax = err as { response?: { data?: { error?: string } } };
-      setUploadError(ax.response?.data?.error || t("pageBuilder.uploadFailed"));
+      if ((err as { name?: string })?.name === "AbortError") {
+        setUploadError(t("pageBuilder.mirrorAborted"));
+      } else {
+        const ax = err as { response?: { data?: { error?: string } } };
+        setUploadError(
+          ax.response?.data?.error || t("pageBuilder.uploadFailed"),
+        );
+        setUploadFailedStage(uploadActiveStageRef.current || "preparing");
+      }
     } finally {
       uploadLockRef.current = false;
       setUploading(false);
+      uploadAbortRef.current = null;
     }
+  };
+
+  const closeMirrorDialog = () => {
+    if (mirroring) {
+      mirrorAbortRef.current?.abort();
+    }
+    setMirrorOpen(false);
+    setMirroring(false);
+    resetMirrorProgress();
+    mirrorAbortRef.current = null;
   };
 
   const onMirror = async (e: FormEvent) => {
@@ -365,29 +731,114 @@ export default function WorkbenchPageBuilderPage() {
       setMirrorError(t("pageBuilder.urlRequired"));
       return;
     }
+
+    mirrorAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    mirrorAbortRef.current = ctrl;
+
+    resetMirrorProgress();
     setMirroring(true);
-    setMirrorError("");
+    setActiveMirrorStage("fetching");
+    setMirrorPercent(10);
+
+    let finished = false;
     try {
-      await api.mirrorPhishingPage({
-        url,
-        name: mirrorForm.name.trim() || undefined,
-        submit_url: mirrorForm.submit_url.trim() || "/api/submit",
-        redirect_url: mirrorForm.redirect_url.trim() || undefined,
+      const token = getStoredToken();
+      const res = await fetch("/api/phishing-pages/mirror/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          url,
+          name: mirrorForm.name.trim() || undefined,
+          submit_url: mirrorForm.submit_url.trim() || "/api/submit",
+          redirect_url: mirrorForm.redirect_url.trim() || undefined,
+        }),
+        signal: ctrl.signal,
       });
-      setToast(t("pageBuilder.mirrorSuccess"));
-      setMirrorOpen(false);
-      setMirrorForm({
-        url: "",
-        name: "",
-        submit_url: "/api/submit",
-        redirect_url: "",
-      });
-      fetchPages();
+
+      if (!res.ok || !res.body) {
+        let msg = t("pageBuilder.mirrorFailed");
+        try {
+          const data = (await res.json()) as { error?: string };
+          if (data?.error) msg = data.error;
+        } catch {
+          /* ignore */
+        }
+        setMirrorError(msg);
+        return;
+      }
+
+      await consumeMirrorProgressStream(
+        res.body,
+        (ev) => {
+          if (typeof ev.percent === "number") {
+            setMirrorPercent(Math.max(0, Math.min(100, ev.percent)));
+          }
+          if (ev.message) setMirrorStatusMessage(ev.message);
+
+          if (ev.stage === "failed") {
+            finished = true;
+            const failedAt =
+              ev.stage_failed || mirrorActiveStageRef.current || "fetching";
+            setMirrorFailedStage(failedAt);
+            if (MIRROR_STAGES.includes(failedAt as MirrorStage)) {
+              setActiveMirrorStage(failedAt as MirrorStage);
+            }
+            setMirrorError(
+              ev.error || ev.message || t("pageBuilder.mirrorFailed"),
+            );
+            return;
+          }
+
+          if (ev.stage === "done") {
+            finished = true;
+            setMirrorDone(true);
+            setMirrorPercent(100);
+            setActiveMirrorStage("saving");
+            setMirrorStatusMessage(
+              ev.message || t("pageBuilder.mirrorStageDone"),
+            );
+            setToast(t("pageBuilder.mirrorSuccess"));
+            setTimeout(() => {
+              setMirrorOpen(false);
+              resetMirrorProgress();
+              setMirrorForm({
+                url: "",
+                name: "",
+                submit_url: "/api/submit",
+                redirect_url: "",
+              });
+              fetchPages();
+            }, 600);
+            return;
+          }
+
+          if (MIRROR_STAGES.includes(ev.stage as MirrorStage)) {
+            setActiveMirrorStage(ev.stage as MirrorStage);
+          }
+        },
+        ctrl.signal,
+      );
+
+      if (!finished && !ctrl.signal.aborted) {
+        setMirrorError(t("pageBuilder.mirrorStreamFailed"));
+        setMirrorFailedStage(mirrorActiveStageRef.current || "fetching");
+      }
     } catch (err) {
-      const ax = err as { response?: { data?: { error?: string } } };
-      setMirrorError(ax.response?.data?.error || t("pageBuilder.mirrorFailed"));
+      if ((err as { name?: string })?.name === "AbortError") {
+        setMirrorError(t("pageBuilder.mirrorAborted"));
+      } else {
+        setMirrorError(t("pageBuilder.mirrorFailed"));
+        setMirrorFailedStage(mirrorActiveStageRef.current || "fetching");
+      }
     } finally {
       setMirroring(false);
+      if (mirrorAbortRef.current === ctrl) {
+        mirrorAbortRef.current = null;
+      }
     }
   };
 
@@ -518,8 +969,17 @@ export default function WorkbenchPageBuilderPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-        <DialogContent>
+      <Dialog
+        open={uploadOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeUploadDialog();
+            return;
+          }
+          setUploadOpen(true);
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{t("pageBuilder.uploadHtml")}</DialogTitle>
           </DialogHeader>
@@ -533,7 +993,7 @@ export default function WorkbenchPageBuilderPage() {
                 onChange={onUploadFileChange}
                 buttonLabel={t("pageBuilder.uploadHtml")}
                 emptyHint={t("pageBuilder.uploadFileHint")}
-                disabled={uploading}
+                disabled={uploading || uploadDone}
               />
             </div>
             <div className="space-y-1.5">
@@ -546,6 +1006,7 @@ export default function WorkbenchPageBuilderPage() {
                 }
                 placeholder={t("pageBuilder.pageNameOptional")}
                 required
+                disabled={uploading || uploadDone}
               />
               <p className="text-xs text-slate-500">
                 {willOverwrite
@@ -567,8 +1028,136 @@ export default function WorkbenchPageBuilderPage() {
                   }))
                 }
                 placeholder={t("pageBuilder.uploadDescriptionOptional")}
+                disabled={uploading || uploadDone}
               />
             </div>
+
+            <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">
+                  {t("pageBuilder.uploadAiRewrite")}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {t("pageBuilder.uploadAiRewriteHint")}
+                </div>
+              </div>
+              <Switch
+                checked={uploadAiRewrite}
+                onCheckedChange={setUploadAiRewrite}
+                disabled={uploading || uploadDone}
+              />
+            </div>
+
+            {uploadAiRewrite ? (
+              <>
+                <div className="space-y-1.5">
+                  <Label htmlFor="upload-submit">
+                    {t("pageBuilder.submitUrl")}
+                  </Label>
+                  <Input
+                    id="upload-submit"
+                    value={uploadForm.submit_url}
+                    onChange={(e) =>
+                      setUploadForm((prev) => ({
+                        ...prev,
+                        submit_url: e.target.value,
+                      }))
+                    }
+                    placeholder="/api/submit"
+                    disabled={uploading || uploadDone}
+                  />
+                  <p className="text-xs text-slate-500">
+                    {t("pageBuilder.submitUrlHint")}
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="upload-redirect">
+                    {t("pageBuilder.redirectUrl")}
+                  </Label>
+                  <Input
+                    id="upload-redirect"
+                    value={uploadForm.redirect_url}
+                    onChange={(e) =>
+                      setUploadForm((prev) => ({
+                        ...prev,
+                        redirect_url: e.target.value,
+                      }))
+                    }
+                    placeholder={t("pageBuilder.redirectUrlOptional")}
+                    disabled={uploading || uploadDone}
+                  />
+                </div>
+              </>
+            ) : null}
+
+            {(uploadAiRewrite &&
+              (uploading ||
+                uploadDone ||
+                uploadFailedStage ||
+                uploadPercent > 0)) && (
+              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-slate-800">
+                    {t("pageBuilder.uploadProgressTitle")}
+                  </p>
+                  <span className="text-xs tabular-nums text-slate-500">
+                    {uploadPercent}%
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className={`h-full rounded-full transition-all duration-300 ${
+                      uploadFailedStage
+                        ? "bg-red-500"
+                        : uploadDone
+                          ? "bg-emerald-500"
+                          : "bg-cyan-600"
+                    }`}
+                    style={{ width: `${uploadPercent}%` }}
+                  />
+                </div>
+                <ol className="space-y-2">
+                  {UPLOAD_REWRITE_STAGES.map((stage) => {
+                    const status = uploadStepStatus(stage);
+                    return (
+                      <li
+                        key={stage}
+                        className="flex items-start gap-2 text-sm"
+                      >
+                        <span className="mt-0.5 shrink-0">
+                          {status === "done" ? (
+                            <Check className="h-4 w-4 text-emerald-600" />
+                          ) : status === "active" ? (
+                            <Loader2 className="h-4 w-4 animate-spin text-cyan-600" />
+                          ) : status === "failed" ? (
+                            <X className="h-4 w-4 text-red-600" />
+                          ) : (
+                            <Circle className="h-4 w-4 text-slate-300" />
+                          )}
+                        </span>
+                        <span
+                          className={
+                            status === "failed"
+                              ? "font-medium text-red-700"
+                              : status === "active"
+                                ? "font-medium text-slate-900"
+                                : status === "done"
+                                  ? "text-slate-700"
+                                  : "text-slate-400"
+                          }
+                        >
+                          {t(uploadRewriteStageLabelKey(stage))}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ol>
+                {uploadStatusMessage && !uploadError ? (
+                  <p className="text-xs text-slate-500">{uploadStatusMessage}</p>
+                ) : null}
+              </div>
+            )}
+
             {uploadError ? (
               <p className="text-sm text-red-600">{uploadError}</p>
             ) : null}
@@ -576,23 +1165,43 @@ export default function WorkbenchPageBuilderPage() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setUploadOpen(false)}
-                disabled={uploading}
+                onClick={() => {
+                  if (uploading) {
+                    uploadAbortRef.current?.abort();
+                    return;
+                  }
+                  closeUploadDialog();
+                }}
               >
-                {t("common.cancel")}
-              </Button>
-              <Button type="submit" disabled={uploading}>
                 {uploading
-                  ? t("pageBuilder.uploading")
-                  : t("pageBuilder.startUpload")}
+                  ? t("pageBuilder.mirrorCancel")
+                  : t("common.cancel")}
               </Button>
+              {uploadFailedStage && !uploading ? (
+                <Button type="submit">{t("pageBuilder.mirrorRetry")}</Button>
+              ) : (
+                <Button type="submit" disabled={uploading || uploadDone}>
+                  {uploading
+                    ? t("pageBuilder.uploading")
+                    : t("pageBuilder.startUpload")}
+                </Button>
+              )}
             </div>
           </form>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={mirrorOpen} onOpenChange={setMirrorOpen}>
-        <DialogContent>
+      <Dialog
+        open={mirrorOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeMirrorDialog();
+            return;
+          }
+          setMirrorOpen(true);
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{t("pageBuilder.mirrorFromUrl")}</DialogTitle>
           </DialogHeader>
@@ -608,6 +1217,7 @@ export default function WorkbenchPageBuilderPage() {
                 }
                 placeholder="https://example.com/login"
                 required
+                disabled={mirroring || mirrorDone}
               />
             </div>
             <div className="space-y-1.5">
@@ -619,6 +1229,7 @@ export default function WorkbenchPageBuilderPage() {
                   setMirrorForm((prev) => ({ ...prev, name: e.target.value }))
                 }
                 placeholder={t("pageBuilder.pageNameOptional")}
+                disabled={mirroring || mirrorDone}
               />
             </div>
             <div className="space-y-1.5">
@@ -633,6 +1244,7 @@ export default function WorkbenchPageBuilderPage() {
                   }))
                 }
                 placeholder="/api/submit"
+                disabled={mirroring || mirrorDone}
               />
               <p className="text-xs text-slate-500">
                 {t("pageBuilder.submitUrlHint")}
@@ -652,8 +1264,74 @@ export default function WorkbenchPageBuilderPage() {
                   }))
                 }
                 placeholder={t("pageBuilder.redirectUrlOptional")}
+                disabled={mirroring || mirrorDone}
               />
             </div>
+
+            {(mirroring || mirrorDone || mirrorFailedStage || mirrorPercent > 0) && (
+              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-slate-800">
+                    {t("pageBuilder.mirrorProgressTitle")}
+                  </p>
+                  <span className="text-xs tabular-nums text-slate-500">
+                    {mirrorPercent}%
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className={`h-full rounded-full transition-all duration-300 ${
+                      mirrorFailedStage
+                        ? "bg-red-500"
+                        : mirrorDone
+                          ? "bg-emerald-500"
+                          : "bg-cyan-600"
+                    }`}
+                    style={{ width: `${mirrorPercent}%` }}
+                  />
+                </div>
+                <ol className="space-y-2">
+                  {MIRROR_STAGES.map((stage) => {
+                    const status = mirrorStepStatus(stage);
+                    return (
+                      <li
+                        key={stage}
+                        className="flex items-start gap-2 text-sm"
+                      >
+                        <span className="mt-0.5 shrink-0">
+                          {status === "done" ? (
+                            <Check className="h-4 w-4 text-emerald-600" />
+                          ) : status === "active" ? (
+                            <Loader2 className="h-4 w-4 animate-spin text-cyan-600" />
+                          ) : status === "failed" ? (
+                            <X className="h-4 w-4 text-red-600" />
+                          ) : (
+                            <Circle className="h-4 w-4 text-slate-300" />
+                          )}
+                        </span>
+                        <span
+                          className={
+                            status === "failed"
+                              ? "font-medium text-red-700"
+                              : status === "active"
+                                ? "font-medium text-slate-900"
+                                : status === "done"
+                                  ? "text-slate-700"
+                                  : "text-slate-400"
+                          }
+                        >
+                          {t(mirrorStageLabelKey(stage))}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ol>
+                {mirrorStatusMessage && !mirrorError ? (
+                  <p className="text-xs text-slate-500">{mirrorStatusMessage}</p>
+                ) : null}
+              </div>
+            )}
+
             {mirrorError ? (
               <p className="text-sm text-red-600">{mirrorError}</p>
             ) : null}
@@ -661,14 +1339,27 @@ export default function WorkbenchPageBuilderPage() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setMirrorOpen(false)}
-                disabled={mirroring}
+                onClick={() => {
+                  if (mirroring) {
+                    mirrorAbortRef.current?.abort();
+                    return;
+                  }
+                  closeMirrorDialog();
+                }}
               >
-                {t("common.cancel")}
+                {mirroring
+                  ? t("pageBuilder.mirrorCancel")
+                  : t("common.cancel")}
               </Button>
-              <Button type="submit" disabled={mirroring}>
-                {mirroring ? t("pageBuilder.mirroring") : t("pageBuilder.startMirror")}
-              </Button>
+              {mirrorFailedStage && !mirroring ? (
+                <Button type="submit">{t("pageBuilder.mirrorRetry")}</Button>
+              ) : (
+                <Button type="submit" disabled={mirroring || mirrorDone}>
+                  {mirroring
+                    ? t("pageBuilder.mirroring")
+                    : t("pageBuilder.startMirror")}
+                </Button>
+              )}
             </div>
           </form>
         </DialogContent>

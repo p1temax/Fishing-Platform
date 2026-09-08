@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   LogOut,
-  Globe,
+  Languages,
   Mail,
   Network,
   ShieldBan,
@@ -30,6 +30,7 @@ import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { BrandLogo } from "@/components/brand-logo";
 import { Separator } from "@/components/ui/separator";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   Collapsible,
   CollapsibleContent,
@@ -43,6 +44,16 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
+
+function userInitials(username?: string | null) {
+  const name = (username || "").trim();
+  if (!name) return "U";
+  const parts = name.split(/[\s._-]+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0]![0] ?? ""}${parts[1]![0] ?? ""}`.toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
 
 type NavItem = {
   href: string;
@@ -335,11 +346,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
           <div className="border-t border-sidebar-border p-2">
             {!collapsed ? (
-              <div className="flex items-center gap-2 rounded-md px-2 py-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-accent text-xs font-semibold">
-                  {(user?.username || "A").slice(0, 1).toUpperCase()}
-                </div>
-                <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 rounded-lg px-2 py-2">
+                <Avatar className="h-8 w-8 rounded-lg">
+                  <AvatarFallback className="rounded-lg bg-sidebar-accent text-xs font-medium text-sidebar-accent-foreground">
+                    {userInitials(user?.username)}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1 text-left">
                   <div className="truncate text-sm font-medium">
                     {user?.username || t("app.admin")}
                   </div>
@@ -367,8 +380,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     size="icon"
                     className="w-full text-sidebar-foreground hover:bg-sidebar-accent"
                     onClick={handleLogout}
+                    aria-label={t("app.logout")}
                   >
-                    <LogOut className="h-4 w-4" />
+                    <Avatar className="h-8 w-8 rounded-lg">
+                      <AvatarFallback className="rounded-lg bg-sidebar-accent text-xs font-medium text-sidebar-accent-foreground">
+                        {userInitials(user?.username)}
+                      </AvatarFallback>
+                    </Avatar>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="right">{t("app.logout")}</TooltipContent>
@@ -400,7 +418,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     : "locale.switchToChinese",
                 )}
               >
-                <Globe className="h-4 w-4" />
+                <Languages className="h-4 w-4" />
               </Button>
             </div>
           </header>

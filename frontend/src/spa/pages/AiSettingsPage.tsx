@@ -77,6 +77,8 @@ export default function AiSettingsPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<AiProfile | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testingForm, setTestingForm] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -210,6 +212,89 @@ export default function AiSettingsPage() {
     setDeleting(false);
   };
 
+  const runConfigTest = async (payload: {
+    id?: string;
+    base_url?: string;
+    api_key?: string;
+    model?: string;
+    timeout_sec?: number;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    setError("");
+    setToast("");
+    try {
+      const { data } = await api.testAiSettings(payload);
+      if (data?.ok) {
+        setToast(
+          t("aiSettings.testSuccess", {
+            ms: String(data.latency_ms ?? 0),
+            endpoint: String(data.endpoint || ""),
+          }),
+        );
+        return { ok: true };
+      }
+      const msg = data?.error || t("aiSettings.testFailed");
+      setError(msg);
+      return { ok: false, error: msg };
+    } catch (err) {
+      const ax = err as {
+        response?: { data?: { error?: string; endpoint?: string } };
+      };
+      const msg = ax.response?.data?.error || t("aiSettings.testFailed");
+      const endpoint = ax.response?.data?.endpoint;
+      const full = endpoint ? `${msg} (${endpoint})` : msg;
+      setError(full);
+      return { ok: false, error: full };
+    }
+  };
+
+  const testSavedProfile = async (profile: AiProfile) => {
+    if (!profile.api_key_set) {
+      setError(t("aiSettings.testNeedKey"));
+      return;
+    }
+    setTestingId(profile.id);
+    try {
+      await runConfigTest({
+        id: profile.id,
+        base_url: profile.base_url,
+        model: profile.model,
+        timeout_sec: Math.min(profile.timeout_sec || 30, 60),
+      });
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const testFormConfig = async () => {
+    const baseUrl = form.base_url.trim();
+    const model = form.model.trim();
+    if (!baseUrl || !model) {
+      setFormError(t("aiSettings.requiredFields"));
+      return;
+    }
+    const key = apiKeyDirty ? form.api_key.trim() : "";
+    if (!key && !form.api_key_set) {
+      setFormError(t("aiSettings.testNeedKey"));
+      return;
+    }
+    setFormError("");
+    setTestingForm(true);
+    try {
+      const result = await runConfigTest({
+        id: form.id || undefined,
+        base_url: baseUrl,
+        model,
+        api_key: key || undefined,
+        timeout_sec: Math.min(form.timeout_sec || 30, 60),
+      });
+      if (!result.ok) {
+        setFormError(result.error || t("aiSettings.testFailed"));
+      }
+    } finally {
+      setTestingForm(false);
+    }
+  };
+
   return (
     <div className="space-y-4 p-4 md:p-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -314,6 +399,16 @@ export default function AiSettingsPage() {
                         <Button
                           variant="outline"
                           size="sm"
+                          disabled={testingId === profile.id || saving}
+                          onClick={() => testSavedProfile(profile)}
+                        >
+                          {testingId === profile.id
+                            ? t("aiSettings.testing")
+                            : t("aiSettings.testConfig")}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
                           onClick={() => openEdit(profile)}
                         >
                           {t("common.edit")}
@@ -362,8 +457,11 @@ export default function AiSettingsPage() {
                 onChange={(e) =>
                   setForm((prev) => ({ ...prev, base_url: e.target.value }))
                 }
-                placeholder="https://api.x.ai/v1"
+                placeholder="https://open.bigmodel.cn/api/paas/v4"
               />
+              <p className="text-xs text-muted-foreground">
+                {t("aiSettings.baseUrlHint")}
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="ai-model">{t("aiSettings.model")}</Label>
@@ -429,7 +527,7 @@ export default function AiSettingsPage() {
             {formError ? (
               <p className="text-sm text-red-600">{formError}</p>
             ) : null}
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button
                 type="button"
                 variant="outline"
@@ -437,7 +535,17 @@ export default function AiSettingsPage() {
               >
                 {t("common.cancel")}
               </Button>
-              <Button type="submit" disabled={saving}>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={testingForm || saving}
+                onClick={testFormConfig}
+              >
+                {testingForm
+                  ? t("aiSettings.testing")
+                  : t("aiSettings.testConfig")}
+              </Button>
+              <Button type="submit" disabled={saving || testingForm}>
                 {saving ? "…" : t("common.confirm")}
               </Button>
             </div>

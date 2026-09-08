@@ -148,6 +148,15 @@ export const api = {
   updateAiSettings(data: unknown) {
     return apiClient.put("/api/ai-settings/", data);
   },
+  testAiSettings(data: {
+    id?: string;
+    base_url?: string;
+    api_key?: string;
+    model?: string;
+    timeout_sec?: number;
+  }) {
+    return apiClient.post("/api/ai-settings/test/", data, { timeout: 60000 });
+  },
   getMailTrackingSettings() {
     return apiClient.get("/api/mail-tracking-settings/");
   },
@@ -162,6 +171,7 @@ export const api = {
   getPhishingPage(id: number | string) {
     return apiClient.get(`/api/phishing-pages/${id}/`);
   },
+  // Prefer streamMirrorPhishingPage (SSE stages). Kept for non-UI callers.
   mirrorPhishingPage(data: {
     url: string;
     name?: string;
@@ -169,7 +179,10 @@ export const api = {
     submit_url?: string;
     redirect_url?: string;
   }) {
-    return apiClient.post("/api/phishing-pages/mirror/", data, { timeout: 180000 });
+    return apiClient.post("/api/phishing-pages/mirror/", data, {
+      timeout: 180000,
+      responseType: "text",
+    });
   },
   upsertPhishingPage(data: {
     name: string;

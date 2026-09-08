@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"fishing-platform-backend/config"
 	"fishing-platform-backend/models"
@@ -77,7 +79,7 @@ func UpdateAISettings(c *gin.Context) {
 	for _, p := range payload.Profiles {
 		name := strings.TrimSpace(p.Name)
 		model := strings.TrimSpace(p.Model)
-		baseURL := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
+		baseURL := utils.NormalizeOpenAICompatibleBaseURL(p.BaseURL)
 		if name == "" || model == "" || baseURL == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "each profile requires name, model and base_url"})
 			return
@@ -140,6 +142,93 @@ func UpdateAISettings(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, aiSettingsDTO{Profiles: toAIProfileDTOs(merged)})
+}
+
+type aiTestRequest struct {
+	ID         string `json:"id"`
+	BaseURL    string `json:"base_url"`
+	APIKey     string `json:"api_key"`
+	Model      string `json:"model"`
+	TimeoutSec int    `json:"timeout_sec"`
+}
+
+// TestAISettings probes chat/completions for a saved profile or inline form values.
+func TestAISettings(c *gin.Context) {
+	var req aiTestRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	baseURL := utils.NormalizeOpenAICompatibleBaseURL(req.BaseURL)
+	model := strings.TrimSpace(req.Model)
+	apiKey := strings.TrimSpace(req.APIKey)
+	timeoutSec := req.TimeoutSec
+
+	if id := strings.TrimSpace(req.ID); id != "" {
+		db := config.GetDB()
+		var row models.AIProfile
+		if err := db.Where("id = ?", id).First(&row).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "AI profile not found"})
+			return
+		}
+		if baseURL == "" {
+			baseURL = utils.NormalizeOpenAICompatibleBaseURL(row.BaseURL)
+		}
+		if model == "" {
+			model = strings.TrimSpace(row.Model)
+		}
+		if timeoutSec <= 0 {
+			timeoutSec = row.TimeoutSec
+		}
+		if apiKey == "" || looksMaskedSecret(apiKey) {
+			if strings.TrimSpace(row.APIKey) != "" {
+				if dec, err := utils.Decrypt(row.APIKey); err == nil {
+					apiKey = dec
+				} else {
+					apiKey = row.APIKey
+				}
+			}
+		}
+	}
+
+	if baseURL == "" || model == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "base_url and model are required"})
+		return
+	}
+	if apiKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "API key is required"})
+		return
+	}
+	if timeoutSec <= 0 {
+		timeoutSec = 30
+	}
+	if timeoutSec > 120 {
+		timeoutSec = 120
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+
+	result, err := utils.ProbeChatCompletions(ctx, baseURL, apiKey, model, time.Duration(timeoutSec)*time.Second)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"ok":         false,
+			"error":      err.Error(),
+			"endpoint":   result.Endpoint,
+			"latency_ms": result.LatencyMs,
+			"model":      result.Model,
+			"status":     result.StatusCode,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":         true,
+		"endpoint":   result.Endpoint,
+		"latency_ms": result.LatencyMs,
+		"model":      result.Model,
+		"status":     result.StatusCode,
+	})
 }
 
 // ActiveAIConfig returns the enabled profile with decrypted API key for server use.

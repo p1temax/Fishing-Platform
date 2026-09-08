@@ -151,6 +151,101 @@ type chatCompletionResponse struct {
 	Error json.RawMessage `json:"error"`
 }
 
+// NormalizeOpenAICompatibleBaseURL strips trailing slash and common endpoint
+// suffixes (/chat/completions, /completions, /responses) so callers can append
+// the path they need. Accepts both API roots (…/v1, …/v4) and full endpoint URLs.
+func NormalizeOpenAICompatibleBaseURL(baseURL string) string {
+	u := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	for u != "" {
+		lower := strings.ToLower(u)
+		var stripped bool
+		for _, suffix := range []string{"/chat/completions", "/completions", "/responses"} {
+			if strings.HasSuffix(lower, suffix) {
+				u = strings.TrimRight(u[:len(u)-len(suffix)], "/")
+				stripped = true
+				break
+			}
+		}
+		if !stripped {
+			break
+		}
+	}
+	return u
+}
+
+// ProbeChatCompletionsResult is returned by ProbeChatCompletions.
+type ProbeChatCompletionsResult struct {
+	Endpoint   string `json:"endpoint"`
+	LatencyMs  int64  `json:"latency_ms"`
+	Model      string `json:"model"`
+	StatusCode int    `json:"status_code"`
+}
+
+// ProbeChatCompletions sends a minimal chat/completions request to verify
+// base_url + api_key + model connectivity for AI Settings.
+func ProbeChatCompletions(ctx context.Context, baseURL, apiKey, model string, timeout time.Duration) (ProbeChatCompletionsResult, error) {
+	out := ProbeChatCompletionsResult{Model: strings.TrimSpace(model)}
+	if strings.TrimSpace(apiKey) == "" {
+		return out, fmt.Errorf("API key is required")
+	}
+	if strings.TrimSpace(model) == "" {
+		return out, fmt.Errorf("model is required")
+	}
+	baseURL = NormalizeOpenAICompatibleBaseURL(baseURL)
+	if baseURL == "" {
+		return out, fmt.Errorf("base URL is required")
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	endpoint := baseURL + "/chat/completions"
+	out.Endpoint = endpoint
+
+	payload := map[string]interface{}{
+		"model": model,
+		"messages": []chatMessage{
+			{Role: "user", Content: "ping"},
+		},
+		"max_tokens":  8,
+		"temperature": 0,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return out, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	started := time.Now()
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	out.LatencyMs = time.Since(started).Milliseconds()
+	if err != nil {
+		return out, fmt.Errorf("request to %s failed: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+	out.StatusCode = resp.StatusCode
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return out, err
+	}
+
+	var parsed chatCompletionResponse
+	_ = json.Unmarshal(body, &parsed)
+	if errMsg := extractAIErrorMessage(parsed.Error); errMsg != "" {
+		return out, formatAIHTTPError(resp.StatusCode, endpoint, errMsg)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return out, formatAIHTTPError(resp.StatusCode, endpoint, truncateForErr(string(body), 300))
+	}
+	return out, nil
+}
+
 // RewriteHTMLWithAI calls an OpenAI-compatible chat completions endpoint.
 func RewriteHTMLWithAI(ctx context.Context, baseURL, apiKey, model string, timeout time.Duration, in MirrorRewriteInput) (string, error) {
 	if strings.TrimSpace(apiKey) == "" {
@@ -159,7 +254,7 @@ func RewriteHTMLWithAI(ctx context.Context, baseURL, apiKey, model string, timeo
 	if strings.TrimSpace(model) == "" {
 		model = defaultAIModelFallback()
 	}
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	baseURL = NormalizeOpenAICompatibleBaseURL(baseURL)
 	if baseURL == "" {
 		return "", fmt.Errorf("AI base URL is not configured")
 	}
@@ -191,7 +286,7 @@ func RewriteHTMLWithAI(ctx context.Context, baseURL, apiKey, model string, timeo
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("AI request to %s failed: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
@@ -201,20 +296,35 @@ func RewriteHTMLWithAI(ctx context.Context, baseURL, apiKey, model string, timeo
 	var parsed chatCompletionResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return "", fmt.Errorf("AI request failed with status %d: %s", resp.StatusCode, truncateForErr(string(body), 300))
+			return "", fmt.Errorf("AI request failed (HTTP %d) %s: %s", resp.StatusCode, endpoint, truncateForErr(string(body), 300))
 		}
-		return "", fmt.Errorf("invalid AI response: %w", err)
+		return "", fmt.Errorf("invalid AI response from %s: %w", endpoint, err)
 	}
 	if errMsg := extractAIErrorMessage(parsed.Error); errMsg != "" {
-		return "", fmt.Errorf("AI error: %s", errMsg)
+		return "", formatAIHTTPError(resp.StatusCode, endpoint, errMsg)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("AI request failed with status %d: %s", resp.StatusCode, truncateForErr(string(body), 300))
+		return "", formatAIHTTPError(resp.StatusCode, endpoint, truncateForErr(string(body), 300))
 	}
 	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
-		return "", fmt.Errorf("AI returned empty content")
+		return "", fmt.Errorf("AI returned empty content from %s", endpoint)
 	}
 	return normalizeAIHTMLOutput(parsed.Choices[0].Message.Content), nil
+}
+
+func formatAIHTTPError(status int, endpoint, detail string) error {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		detail = "unknown error"
+	}
+	hint := ""
+	if status == http.StatusNotFound {
+		hint = " Hint: set base_url to the API root (e.g. https://open.bigmodel.cn/api/paas/v4 or https://api.x.ai/v1), not the full /chat/completions path."
+	}
+	if status > 0 {
+		return fmt.Errorf("AI error (HTTP %d) %s: %s%s", status, endpoint, detail, hint)
+	}
+	return fmt.Errorf("AI error %s: %s%s", endpoint, detail, hint)
 }
 
 func extractAIErrorMessage(raw json.RawMessage) string {

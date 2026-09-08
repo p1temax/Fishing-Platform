@@ -99,7 +99,7 @@ func GatherContactsWithAI(ctx context.Context, baseURL, apiKey, model string, ti
 	if strings.TrimSpace(model) == "" {
 		model = defaultAIModelFallback()
 	}
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	baseURL = NormalizeOpenAICompatibleBaseURL(baseURL)
 	if baseURL == "" {
 		return empty, fmt.Errorf("AI base URL is not configured")
 	}
@@ -132,7 +132,7 @@ func GatherContactsWithAI(ctx context.Context, baseURL, apiKey, model string, ti
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return empty, err
+		return empty, fmt.Errorf("AI request to %s failed: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 12<<20))
@@ -141,7 +141,7 @@ func GatherContactsWithAI(ctx context.Context, baseURL, apiKey, model string, ti
 	}
 
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
-		return empty, fmt.Errorf("AI base_url does not support POST /responses with web_search (HTTP %d). Set base_url to an API root that exposes this endpoint (usually ending in /v1)", resp.StatusCode)
+		return empty, fmt.Errorf("AI base_url does not support POST /responses with web_search (HTTP %d at %s). Set base_url to an API root that exposes this endpoint (usually ending in /v1)", resp.StatusCode, endpoint)
 	}
 
 	var parsed responsesAPIResponse
