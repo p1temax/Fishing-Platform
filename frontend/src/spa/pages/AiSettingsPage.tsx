@@ -79,6 +79,7 @@ export default function AiSettingsPage() {
   const [deleting, setDeleting] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testingForm, setTestingForm] = useState(false);
+  const [testReport, setTestReport] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -212,38 +213,137 @@ export default function AiSettingsPage() {
     setDeleting(false);
   };
 
+  type ProbePart = {
+    ok?: boolean;
+    endpoint?: string;
+    latency_ms?: number;
+    status?: number;
+    error?: string;
+    mode?: string;
+  };
+
+  const formatProbeReport = (data: {
+    chat?: ProbePart;
+    web_search?: ProbePart;
+    ok?: boolean;
+    error?: string;
+    latency_ms?: number;
+    endpoint?: string;
+  }) => {
+    const chat = data.chat;
+    const web = data.web_search;
+    const lines: string[] = [];
+
+    if (chat) {
+      lines.push(
+        chat.ok
+          ? t("aiSettings.testChatOk", { ms: String(chat.latency_ms ?? 0) })
+          : t("aiSettings.testChatFail", {
+              error: chat.error || t("aiSettings.testFailed"),
+            }),
+      );
+    } else if (data.ok) {
+      lines.push(
+        t("aiSettings.testChatOk", { ms: String(data.latency_ms ?? 0) }),
+      );
+    } else if (data.error) {
+      lines.push(
+        t("aiSettings.testChatFail", { error: data.error }),
+      );
+    }
+
+    if (web) {
+      const modeLabel =
+        web.mode === "glm_chat_web_search"
+          ? "Zhipu chat+web_search"
+          : web.mode === "glm_web_search"
+            ? "Zhipu /web_search"
+            : web.mode === "responses"
+              ? "Responses"
+              : web.mode || "web_search";
+      lines.push(
+        web.ok
+          ? t("aiSettings.testWebSearchOk", {
+              ms: String(web.latency_ms ?? 0),
+              mode: modeLabel,
+            })
+          : t("aiSettings.testWebSearchFail", {
+              error: web.error || t("aiSettings.testFailed"),
+            }),
+      );
+    }
+
+    return lines.join("\n");
+  };
+
   const runConfigTest = async (payload: {
     id?: string;
     base_url?: string;
     api_key?: string;
     model?: string;
     timeout_sec?: number;
-  }): Promise<{ ok: boolean; error?: string }> => {
+  }): Promise<{
+    ok: boolean;
+    chatOk: boolean;
+    webOk: boolean;
+    error?: string;
+    report?: string;
+  }> => {
     setError("");
     setToast("");
+    setTestReport("");
     try {
       const { data } = await api.testAiSettings(payload);
-      if (data?.ok) {
-        setToast(
-          t("aiSettings.testSuccess", {
-            ms: String(data.latency_ms ?? 0),
-            endpoint: String(data.endpoint || ""),
-          }),
-        );
-        return { ok: true };
+      const report = formatProbeReport(data || {});
+      setTestReport(report);
+
+      const chatOk = data?.chat ? !!data.chat.ok : !!data?.ok;
+      const webOk = data?.web_search ? !!data.web_search.ok : false;
+
+      if (chatOk && webOk) {
+        setToast(report);
+        return { ok: true, chatOk, webOk, report };
       }
-      const msg = data?.error || t("aiSettings.testFailed");
-      setError(msg);
-      return { ok: false, error: msg };
+      // Always show the structured report when anything failed.
+      setError(report || data?.error || t("aiSettings.testFailed"));
+      return {
+        ok: chatOk,
+        chatOk,
+        webOk,
+        error: report,
+        report,
+      };
     } catch (err) {
       const ax = err as {
-        response?: { data?: { error?: string; endpoint?: string } };
+        response?: {
+          data?: {
+            error?: string;
+            endpoint?: string;
+            chat?: ProbePart;
+            web_search?: ProbePart;
+            ok?: boolean;
+            latency_ms?: number;
+          };
+        };
       };
-      const msg = ax.response?.data?.error || t("aiSettings.testFailed");
-      const endpoint = ax.response?.data?.endpoint;
+      const data = ax.response?.data;
+      if (data?.chat || data?.web_search) {
+        const report = formatProbeReport(data);
+        setTestReport(report);
+        setError(report);
+        return {
+          ok: false,
+          chatOk: !!data.chat?.ok,
+          webOk: !!data.web_search?.ok,
+          error: report,
+          report,
+        };
+      }
+      const msg = data?.error || t("aiSettings.testFailed");
+      const endpoint = data?.endpoint;
       const full = endpoint ? `${msg} (${endpoint})` : msg;
       setError(full);
-      return { ok: false, error: full };
+      return { ok: false, chatOk: false, webOk: false, error: full };
     }
   };
 
@@ -258,7 +358,7 @@ export default function AiSettingsPage() {
         id: profile.id,
         base_url: profile.base_url,
         model: profile.model,
-        timeout_sec: Math.min(profile.timeout_sec || 30, 60),
+        timeout_sec: Math.min(profile.timeout_sec || 60, 90),
       });
     } finally {
       setTestingId(null);
@@ -285,10 +385,10 @@ export default function AiSettingsPage() {
         base_url: baseUrl,
         model,
         api_key: key || undefined,
-        timeout_sec: Math.min(form.timeout_sec || 30, 60),
+        timeout_sec: Math.min(form.timeout_sec || 60, 90),
       });
-      if (!result.ok) {
-        setFormError(result.error || t("aiSettings.testFailed"));
+      if (!result.chatOk || !result.webOk) {
+        setFormError(result.report || result.error || t("aiSettings.testFailed"));
       }
     } finally {
       setTestingForm(false);
@@ -315,13 +415,18 @@ export default function AiSettingsPage() {
       </div>
 
       {error ? (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
         </p>
       ) : null}
       {toast ? (
-        <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+        <p className="whitespace-pre-line rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
           {toast}
+        </p>
+      ) : null}
+      {!error && !toast && testReport ? (
+        <p className="whitespace-pre-line rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          {testReport}
         </p>
       ) : null}
 

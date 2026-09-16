@@ -656,23 +656,26 @@ const (
 
 // InfoGatherJob is one AI web-search reconnaissance task.
 type InfoGatherJob struct {
-	ID             uint                `json:"id" gorm:"primaryKey"`
-	Target         string              `json:"target" gorm:"size:500;not null"`
-	Notes          string              `json:"notes" gorm:"type:text"`
-	IncludeXSearch bool                `json:"include_x_search" gorm:"default:false"`
-	Status         InfoGatherJobStatus `json:"status" gorm:"size:20;default:'pending';index"`
-	ErrorMessage   string              `json:"error_message" gorm:"type:text"`
-	RawResponse    string              `json:"-" gorm:"type:text"` // truncated model output; not listed in APIs
-	SummaryNotes   string              `json:"summary_notes" gorm:"type:text"`
-	EmailCount     int                 `json:"email_count" gorm:"default:0"`
-	PhoneCount     int                 `json:"phone_count" gorm:"default:0"`
-	FindingCount   int                 `json:"finding_count" gorm:"default:0"`
-	Model          string              `json:"model" gorm:"size:100"`
-	StartedAt      *time.Time          `json:"started_at"`
-	FinishedAt     *time.Time          `json:"finished_at"`
-	CreatedBy      uint                `json:"created_by" gorm:"index;not null;default:0"`
-	CreatedAt      time.Time           `json:"created_at"`
-	UpdatedAt      time.Time           `json:"updated_at"`
+	ID              uint                `json:"id" gorm:"primaryKey"`
+	Target          string              `json:"target" gorm:"size:500;not null"`
+	Notes           string              `json:"notes" gorm:"type:text"`
+	IncludeXSearch  bool                `json:"include_x_search" gorm:"default:false"`
+	Status          InfoGatherJobStatus `json:"status" gorm:"size:20;default:'pending';index"`
+	ErrorMessage    string              `json:"error_message" gorm:"type:text"`
+	RawResponse     string              `json:"-" gorm:"type:text"` // truncated model output; not listed in APIs
+	SummaryNotes    string              `json:"summary_notes" gorm:"type:text"`
+	EmailCount      int                 `json:"email_count" gorm:"default:0"`
+	PhoneCount      int                 `json:"phone_count" gorm:"default:0"`
+	FindingCount    int                 `json:"finding_count" gorm:"default:0"`
+	ProgressStage   string              `json:"progress_stage" gorm:"size:40"`
+	ProgressPercent int                 `json:"progress_percent" gorm:"default:0"`
+	ProgressMessage string              `json:"progress_message" gorm:"size:500"`
+	Model           string              `json:"model" gorm:"size:100"`
+	StartedAt       *time.Time          `json:"started_at"`
+	FinishedAt      *time.Time          `json:"finished_at"`
+	CreatedBy       uint                `json:"created_by" gorm:"index;not null;default:0"`
+	CreatedAt       time.Time           `json:"created_at"`
+	UpdatedAt       time.Time           `json:"updated_at"`
 }
 
 // InfoGatherFinding is one structured contact/OSINT row from a job.

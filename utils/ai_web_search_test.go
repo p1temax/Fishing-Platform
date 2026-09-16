@@ -38,13 +38,28 @@ func TestParseInfoGatherJSONRejectsNoSource(t *testing.T) {
 }
 
 func TestParseInfoGatherJSONFenced(t *testing.T) {
-	raw := "```json\n{\"findings\":[{\"kind\":\"url\",\"value\":\"https://example.com\",\"source_url\":\"https://example.com\",\"confidence\":\"high\"}]}\n```"
+	raw := "```json\n{\"findings\":[{\"kind\":\"email\",\"value\":\"ops@example.com\",\"source_url\":\"https://example.com\",\"confidence\":\"high\"}]}\n```"
 	got, err := ParseInfoGatherJSON(raw)
 	if err != nil {
 		t.Fatalf("ParseInfoGatherJSON: %v", err)
 	}
-	if len(got.Findings) != 1 || got.Findings[0].Kind != "url" {
+	if len(got.Findings) != 1 || got.Findings[0].Kind != "email" {
 		t.Fatalf("unexpected %+v", got.Findings)
+	}
+}
+
+func TestNormalizeInfoGatherFindingRejectsURLAndName(t *testing.T) {
+	_, ok := NormalizeInfoGatherFinding(InfoGatherFindingDTO{
+		Kind: "url", Value: "https://example.com", SourceURL: "https://example.com",
+	})
+	if ok {
+		t.Fatal("url findings must be rejected")
+	}
+	_, ok = NormalizeInfoGatherFinding(InfoGatherFindingDTO{
+		Kind: "name", Value: "Alice", SourceURL: "https://example.com",
+	})
+	if ok {
+		t.Fatal("name findings must be rejected")
 	}
 }
 

@@ -58,6 +58,7 @@ func TestNormalizeOpenAICompatibleBaseURL(t *testing.T) {
 		{"https://api.openai.com/v1/responses", "https://api.openai.com/v1"},
 		{"https://api.openai.com/v1/completions", "https://api.openai.com/v1"},
 		{"  https://api.x.ai/v1/CHAT/COMPLETIONS  ", "https://api.x.ai/v1"},
+		{"https://open.bigmodel.cn/api/paas/v4/web_search", "https://open.bigmodel.cn/api/paas/v4"},
 	}
 	for _, tc := range cases {
 		if got := NormalizeOpenAICompatibleBaseURL(tc.in); got != tc.want {

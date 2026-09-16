@@ -155,7 +155,7 @@ export const api = {
     model?: string;
     timeout_sec?: number;
   }) {
-    return apiClient.post("/api/ai-settings/test/", data, { timeout: 60000 });
+    return apiClient.post("/api/ai-settings/test/", data, { timeout: 120000 });
   },
   getMailTrackingSettings() {
     return apiClient.get("/api/mail-tracking-settings/");
@@ -221,6 +221,9 @@ export const api = {
   },
   createMailCampaign(data: unknown) {
     return apiClient.post("/api/mail-campaigns/", data);
+  },
+  deleteMailCampaign(id: number | string) {
+    return apiClient.delete(`/api/mail-campaigns/${id}/`);
   },
   getMailCampaignRecipients(id: number | string) {
     return apiClient.get(`/api/mail-campaigns/${id}/recipients/`);

@@ -78,7 +78,7 @@ export default function LoginPage() {
               <div className="mx-auto flex w-full max-w-sm flex-col gap-4 sm:gap-5">
                 <div className="flex flex-col items-center gap-2 text-center">
                   <h1 className="flex items-center gap-2 text-xl font-bold sm:text-2xl">
-                    <BrandLogo size={28} fill="#0f172a" title={t("app.title")} />
+                    <BrandLogo size={32} framed title={t("app.title")} />
                     <span>{t("app.title")}</span>
                   </h1>
                   <p className="text-balance text-xs text-muted-foreground sm:text-sm">

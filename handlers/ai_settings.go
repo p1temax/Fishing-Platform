@@ -152,7 +152,8 @@ type aiTestRequest struct {
 	TimeoutSec int    `json:"timeout_sec"`
 }
 
-// TestAISettings probes chat/completions for a saved profile or inline form values.
+// TestAISettings probes chat/completions (page mirror) and /responses + web_search
+// (info gathering) for a saved profile or inline form values.
 func TestAISettings(c *gin.Context) {
 	var req aiTestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -201,34 +202,63 @@ func TestAISettings(c *gin.Context) {
 		return
 	}
 	if timeoutSec <= 0 {
-		timeoutSec = 30
+		timeoutSec = 60
 	}
 	if timeoutSec > 120 {
 		timeoutSec = 120
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(timeoutSec)*time.Second)
-	defer cancel()
-
-	result, err := utils.ProbeChatCompletions(ctx, baseURL, apiKey, model, time.Duration(timeoutSec)*time.Second)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{
-			"ok":         false,
-			"error":      err.Error(),
-			"endpoint":   result.Endpoint,
-			"latency_ms": result.LatencyMs,
-			"model":      result.Model,
-			"status":     result.StatusCode,
-		})
-		return
+	chatTimeout := 30 * time.Second
+	webTimeout := time.Duration(timeoutSec) * time.Second
+	if webTimeout < 45*time.Second {
+		webTimeout = 45 * time.Second
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"ok":         true,
-		"endpoint":   result.Endpoint,
-		"latency_ms": result.LatencyMs,
-		"model":      result.Model,
-		"status":     result.StatusCode,
-	})
+	if webTimeout > 90*time.Second {
+		webTimeout = 90 * time.Second
+	}
+
+	chatCtx, chatCancel := context.WithTimeout(c.Request.Context(), chatTimeout)
+	chatResult, chatErr := utils.ProbeChatCompletions(chatCtx, baseURL, apiKey, model, chatTimeout)
+	chatCancel()
+
+	webCtx, webCancel := context.WithTimeout(c.Request.Context(), webTimeout)
+	webResult, webErr := utils.ProbeWebSearch(webCtx, baseURL, apiKey, model, webTimeout)
+	webCancel()
+
+	chatPayload := gin.H{
+		"ok":         chatErr == nil,
+		"endpoint":   chatResult.Endpoint,
+		"latency_ms": chatResult.LatencyMs,
+		"status":     chatResult.StatusCode,
+	}
+	if chatErr != nil {
+		chatPayload["error"] = chatErr.Error()
+	}
+	webPayload := gin.H{
+		"ok":         webErr == nil,
+		"endpoint":   webResult.Endpoint,
+		"latency_ms": webResult.LatencyMs,
+		"status":     webResult.StatusCode,
+		"mode":       webResult.Mode,
+	}
+	if webErr != nil {
+		webPayload["error"] = webErr.Error()
+	}
+
+	// Backward-compatible top-level fields mirror the chat probe.
+	resp := gin.H{
+		"ok":         chatErr == nil,
+		"model":      model,
+		"endpoint":   chatResult.Endpoint,
+		"latency_ms": chatResult.LatencyMs,
+		"status":     chatResult.StatusCode,
+		"chat":       chatPayload,
+		"web_search": webPayload,
+	}
+	if chatErr != nil {
+		resp["error"] = chatErr.Error()
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // ActiveAIConfig returns the enabled profile with decrypted API key for server use.

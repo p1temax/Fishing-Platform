@@ -55,6 +55,7 @@ export default function WorkbenchMailPage() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [formOpen, setFormOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const [smtpServiceId, setSmtpServiceId] = useState<number | "">("");
   const [projectId, setProjectId] = useState<number | "">("");
@@ -150,6 +151,29 @@ export default function WorkbenchMailPage() {
       setLandingUrl(selectedProject.login_url);
     }
   }, [selectedProject, landingUrl]);
+
+  const onDeleteCampaign = async (campaign: MailCampaign) => {
+    if (campaign.status === "sending") {
+      setError(t("workbench.campaignDeleteRunning"));
+      return;
+    }
+    if (!window.confirm(t("workbench.campaignDeleteConfirm"))) return;
+    setDeletingId(campaign.id);
+    setError("");
+    setToast("");
+    try {
+      await api.deleteMailCampaign(campaign.id);
+      setToast(t("workbench.campaignDeleteSuccess"));
+      await load();
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data
+          ?.error || t("workbench.campaignDeleteFailed");
+      setError(msg);
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -422,16 +446,24 @@ export default function WorkbenchMailPage() {
                       {formatTime(c.created_at)}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        <Button
-                          variant="link"
-                          size="sm"
-                          className="h-auto px-1"
-                          asChild
-                        >
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        <Button variant="outline" size="sm" asChild>
                           <Link to={`/workbench/mail/${c.id}`}>
                             {t("common.details")}
                           </Link>
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                          disabled={
+                            deletingId === c.id || c.status === "sending"
+                          }
+                          onClick={() => onDeleteCampaign(c)}
+                        >
+                          {deletingId === c.id
+                            ? "…"
+                            : t("common.delete")}
                         </Button>
                       </div>
                     </td>

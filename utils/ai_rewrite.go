@@ -159,7 +159,7 @@ func NormalizeOpenAICompatibleBaseURL(baseURL string) string {
 	for u != "" {
 		lower := strings.ToLower(u)
 		var stripped bool
-		for _, suffix := range []string{"/chat/completions", "/completions", "/responses"} {
+		for _, suffix := range []string{"/chat/completions", "/completions", "/responses", "/web_search"} {
 			if strings.HasSuffix(lower, suffix) {
 				u = strings.TrimRight(u[:len(u)-len(suffix)], "/")
 				stripped = true

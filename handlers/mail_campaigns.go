@@ -333,6 +333,50 @@ func GetMailCampaign(c *gin.Context) {
 	c.JSON(http.StatusOK, item)
 }
 
+// DeleteMailCampaign deletes a campaign and its recipients/events (owner or admin).
+func DeleteMailCampaign(c *gin.Context) {
+	user, ok := currentUserOrAbort(c)
+	if !ok {
+		return
+	}
+	db := config.GetDB()
+	var campaign models.MailCampaign
+	if err := scopeByOwner(db, user).First(&campaign, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Campaign not found"})
+		return
+	}
+	if campaign.Status == models.MailCampaignStatusSending {
+		c.JSON(http.StatusConflict, gin.H{"error": "Cannot delete a campaign that is still sending"})
+		return
+	}
+
+	tx := db.Begin()
+	if tx.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete campaign"})
+		return
+	}
+	if err := tx.Where("campaign_id = ?", campaign.ID).Delete(&models.MailEvent{}).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete campaign events"})
+		return
+	}
+	if err := tx.Where("campaign_id = ?", campaign.ID).Delete(&models.MailRecipient{}).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete campaign recipients"})
+		return
+	}
+	if err := tx.Delete(&campaign).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete campaign"})
+		return
+	}
+	if err := tx.Commit().Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit delete"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
 func GetMailCampaignRecipients(c *gin.Context) {
 	user, ok := currentUserOrAbort(c)
 	if !ok {

@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="256" height="256" role="img" aria-label="Fishing Platform">
-  <rect width="128" height="128" rx="28" fill="#0f172a"/>
+  <rect width="128" height="128" rx="28" fill="#1e293b"/>
+  <rect x="1" y="1" width="126" height="126" rx="27" fill="none" stroke="#334155" stroke-width="2"/>
   <g fill="#f8fafc" transform="translate(10 14) scale(0.0978)">
     <path d="M48.9 783.8h214.8c11.1 0 20.1 9 20.1 20.1v172c0 11.1-9 20.1-20.1 20.1H48.9c-11.1 0-20.1-9-20.1-20.1v-172c0-11.1 9-20.1 20.1-20.1z"/>
     <path d="M249.6 222.4m-77.2 0a77.2 77.2 0 1 0 154.4 0 77.2 77.2 0 1 0-154.4 0Z"/>

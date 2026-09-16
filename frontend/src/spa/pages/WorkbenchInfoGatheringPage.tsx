@@ -37,6 +37,7 @@ export default function WorkbenchInfoGatheringPage() {
   const [target, setTarget] = useState("");
   const [notes, setNotes] = useState("");
   const [includeX, setIncludeX] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -87,6 +88,29 @@ export default function WorkbenchInfoGatheringPage() {
       return <Badge variant="warning">{label}</Badge>;
     if (status === "failed") return <Badge variant="danger">{label}</Badge>;
     return <Badge variant="secondary">{label}</Badge>;
+  };
+
+  const onDeleteJob = async (job: InfoGatherJob) => {
+    if (job.status === "running") {
+      setError(t("workbench.infoGatherDeleteRunning"));
+      return;
+    }
+    if (!window.confirm(t("workbench.infoGatherDeleteConfirm"))) return;
+    setDeletingId(job.id);
+    setError("");
+    setToast("");
+    try {
+      await api.deleteInfoGatherJob(job.id);
+      setToast(t("workbench.infoGatherDeleteSuccess"));
+      await load();
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data
+          ?.error || t("workbench.infoGatherDeleteFailed");
+      setError(msg);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const onSubmit = async (e: FormEvent) => {
@@ -273,12 +297,27 @@ export default function WorkbenchInfoGatheringPage() {
                   <td className="px-4 py-2 text-slate-500">
                     {formatTime(job.created_at)}
                   </td>
-                  <td className="px-4 py-2 text-right">
-                    <Button variant="outline" size="sm" asChild>
-                      <Link to={`/workbench/info-gathering/${job.id}`}>
-                        {t("workbench.infoGatherView")}
-                      </Link>
-                    </Button>
+                  <td className="px-4 py-2">
+                    <div className="flex justify-end gap-2">
+                      <Button variant="outline" size="sm" asChild>
+                        <Link to={`/workbench/info-gathering/${job.id}`}>
+                          {t("workbench.infoGatherView")}
+                        </Link>
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                        disabled={
+                          deletingId === job.id || job.status === "running"
+                        }
+                        onClick={() => onDeleteJob(job)}
+                      >
+                        {deletingId === job.id
+                          ? "…"
+                          : t("workbench.infoGatherDelete")}
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}

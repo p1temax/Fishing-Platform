@@ -278,6 +278,7 @@ func main() {
 		both(protected, http.MethodGet, "/mail-campaigns/", handlers.GetMailCampaigns)
 		both(protected, http.MethodGet, "/mail-campaigns/:id/", handlers.GetMailCampaign)
 		both(protected, http.MethodPost, "/mail-campaigns/", handlers.CreateMailCampaign)
+		both(protected, http.MethodDelete, "/mail-campaigns/:id/", handlers.DeleteMailCampaign)
 		both(protected, http.MethodGet, "/mail-campaigns/:id/recipients/", handlers.GetMailCampaignRecipients)
 		both(protected, http.MethodGet, "/mail-campaigns/:id/events/", handlers.GetMailCampaignEvents)
 

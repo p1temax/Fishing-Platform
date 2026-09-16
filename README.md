@@ -1,116 +1,117 @@
+<p align="right">
+  <b>English</b> · <a href="README.zh.md">中文</a>
+</p>
+
 <p align="center">
-  <img src="README.assets/logo.svg" alt="Fishing Platform" width="96" height="96" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="README.assets/logo-dark.svg" />
+    <img src="README.assets/logo.svg" alt="Fishing Platform" width="96" height="96" />
+  </picture>
 </p>
 
 <h1 align="center">Fishing Platform</h1>
 
 <p align="center">
-  <strong>Authorized phishing simulation &amp; credential-harvesting operations console</strong>
+  <strong>Open-source phishing toolkit for red teams</strong>
 </p>
 
 <p align="center">
-  Go + Gin control plane · Next.js operator UI · SQLite · single binary · distributed agents
+  Go + Gin · Next.js · SQLite · one binary · optional remote agents
 </p>
 
 <p align="center">
+  <a href="#what-it-is">What it is</a> ·
   <a href="#features">Features</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#quick-start">Quick start</a> ·
-  <a href="#operator-modules">Modules</a> ·
-  <a href="#security--compliance">Security</a> ·
-  <a href="#license--intended-use">License</a>
+  <a href="#agents">Agents</a> ·
+  <a href="#console">Console</a> ·
+  <a href="#docs">Docs</a>
 </p>
 
 ---
 
-## Overview
+## What it is
 
-**Fishing Platform** is a self-hosted console for **authorized** phishing exercises: build lure pages, deploy them on the control plane or remote agents, send tracked email campaigns, capture submitted credentials, and review engagement plus host telemetry—with RBAC and immutable audit logs.
+**Fishing Platform** (钓鱼台) is a self-hosted phishing toolkit. Stand up landing pages, send mail, watch opens and clicks, and get pinged when someone submits credentials. Run pages on the box or push them out to agents.
 
-It ships as **one Go binary** that embeds the production frontend (`frontend/dist`) and serves the API and UI on the same port.
+If you know Gophish: that's campaigns and templates. This is the ops box around it — pages, agents, live QR, AI gather, webhooks, blacklist.
 
-> **Authorized use only.** Use this software only on systems and users you are explicitly permitted to assess (red team, purple team, security awareness). Unauthorized phishing or credential theft is illegal and unsupported.
+One Go binary embeds the UI (`frontend/dist`) and serves API + console on the same port.
+
+<p align="center">
+  <img src="README.assets/login.png" alt="Login" width="880" />
+</p>
+
+> Use it only on targets you are allowed to phish. No authorization, don't.
 
 ---
 
 ## Features
 
-### Implemented today
+- **Projects** — upload HTML (or pull a page into Page Builder). Run with Docker or local Flask. Optional TLS, agents, QR relay.
+- **Mail** — SMTP profiles, bulk send, per-campaign open/click tracking (`/api/<slug>`). Noise in HTML if you want it.
+- **Hooks** — Feishu, WeCom, Telegram, Slack, DingTalk, Discord. Bind a webhook to the project; submit → “fish on the hook” to chat. Opens/clicks do not fire this.
+- **QR** — live QR image at `/q/{slug}.png`. A local script uploads screen frames; drop `{{QR_RELAY_URL}}` / `{{QR_RELAY_IMG}}` in the page.
+- **Info gathering** — point at your own AI endpoint (`/responses` + `web_search`). Pull public emails/phones, export CSV, hand off to mail.
+- **Agents** — extra binary on other hosts. Many projects per agent, many agents per project. Logs and submits come home.
+- **Housekeeping** — dashboard + host graphs, encrypted passwords at rest, IP geo (QQWry), CSV export, IP blacklist (spray submits → drop the IP so blue team can't flood you), JWT + optional Basic Auth, admin/operator, append-only audit log, EN/ZH UI.
 
-| Area | What it does |
-|------|----------------|
-| **Dashboard** | Project / agent / deployment / credential counters; host CPU · memory · disk snapshots every **30s**, retained **24h** |
-| **Projects** | Create lure projects; run mode **Docker** or **Local Flask**; upload HTML with `{{SUBMIT_URL}}` / `{{REDIRECT_URL}}`; optional TLS certs; bind **push channels** and **agents** |
-| **Deployments** | Build / start / stop / restart on the platform; per-agent isolated deployments with revision tracking |
-| **Credential records** | Harvest username / password / captcha (and extras); passwords encrypted at rest; **IP → geo** via embedded QQWry; CSV export; linkable to mail campaigns |
-| **Runtime logs** | Platform container/local logs plus centrally collected agent project logs |
-| **Page Builder** | Library of HTML pages as cards (live thumbnails); **upload**; **mirror URL + AI rewrite** (requires an enabled AI profile); delete |
-| **Info Gathering** | AI **web_search** via generic `POST {base_url}/responses` (user-supplied URL + API key); optional `x_search`; structured contacts with sources; export CSV; hand off to Send Email |
-| **QR Phishing** | Live QR relay: local screen capture (ROI picker + heartbeat) uploads image frames only; stable `/q/{slug}.png`; project HTML placeholders `{{QR_RELAY_URL}}` / `{{QR_RELAY_IMG}}`; SSE live preview, frame history, health badges, rate limit, rotate slug/token |
-| **Send Email** | Bulk campaigns via configured SMTP; HTML/plain; optional open tracking; click tracking with **per-campaign opaque** `/api/<slug>` paths; HTML noise injection; campaign detail (sent / open / click + event list: status, time, email, IP) |
-| **Mail Tracking (System)** | Platform settings: enable tracking, `public_base_url`, HMAC secret, redirect host allow-list (paths are **auto-generated per campaign**, not hand-edited) |
-| **Mail Services (SMTP)** | Multiple SMTP profiles (TLS/SSL), test send, encrypted passwords |
-| **Push Channels** | Webhooks: Feishu, WeCom, Telegram, Slack, DingTalk, Discord; test push + push logs; bind to projects for credential / runtime alerts |
-| **Agents** | Token registration + heartbeat; lease-based tasks; artifact download; credential submit & log upload from the edge |
-| **IP Blacklist** | Entries created from captured credentials (not free-form create in UI); enable/disable; applies **host firewall** rules where supported |
-| **Users (admin)** | Create operators; reset password; operators cannot access audit logs or admin-only settings |
-| **Audit Logs (admin)** | Append-only operator action history (no delete) |
-| **AI Settings (admin)** | User-supplied base URL + API key + model profiles; only one enabled; Page Builder uses `/chat/completions`, Info Gathering uses `/responses` + `web_search` |
-| **Access control** | JWT sessions; optional **platform Basic Auth** gate; ownership scoping for operators |
-| **i18n** | English (default) and Chinese in the UI |
-
-
+Usual path: SMTP + webhook → page → project (bind the channel) → send → wait for the hook ping → records. If someone starts spraying submits, blacklist the IP.
 
 ---
 
 ## Architecture
 
 ```text
-┌──────────────────────────────────────────┐
-│           Operator browser               │
-│     Next.js SPA (EN/ZH), JWT + RBAC      │
-└────────────────────┬─────────────────────┘
-                     │
-┌────────────────────▼─────────────────────┐
-│         Control plane (Go / Gin)         │
-│  Embedded UI · SQLite · audit middleware │
-│  Projects · Mail · SMTP · Agents · AI    │
-└─────────┬────────────────────┬───────────┘
-          │                    │
-          ▼                    ▼
-   Local Docker /         Remote Agents
-   Local Flask            (multi-project hosts)
-          │                    │
-          └────────┬───────────┘
-                   ▼
-            Credential + log ingest
-            Mail open/click (/api/:slug)
+  Browser (EN/ZH, JWT)
+           │
+           ▼
+  Control plane  (Go / Gin, SQLite, embedded UI)
+           │
+     ┌─────┴──────┐
+     ▼            ▼
+  Docker /     Remote agents
+  local Flask
+     │            │
+     └─────┬──────┘
+           ▼
+  submits · logs · mail open/click · live QR
 ```
 
-**Stack:** Go 1.24 · Gin · GORM/SQLite · Next.js (static export embedded) · Docker SDK (optional run mode)
+Go 1.24, Gin, GORM/SQLite, Next.js static export, optional Docker SDK.
 
 ---
 
 ## Quick start
 
-### Requirements
+Needs Linux, macOS, or Windows.
 
-- Control-plane host: Linux, macOS, or Windows  
-- **Docker** only if you use project run mode `docker`  
-- Agents must be able to reach the control plane HTTP(S) URL  
+- **Run a release binary:** just the binary + `config.yaml`.
+- **Build from source:** Go **1.24+**, Node.js (frontend).
+- **Docker run mode:** Docker Engine (SDK talks to it). Skip if you only use local Flask / agents.
+- **Local Flask run mode:** `python3` with Flask (`flask`, `flask_cors`, `requests`).
+- **QR capture:** Python 3 + the zip from **Workbench → QR Phishing** (or [`scripts/qr-relay`](scripts/qr-relay/README.md)). macOS wants `zbar` for decode.
+- Agents must reach the control plane over HTTP(S).
 
-### 1. Configure
+| What | Default |
+|------|---------|
+| Console / API | `:8000` |
+| Frontend dev | `:8081` → proxies `/api` to `:8000` |
+| Agent landing pages | `10000–20000/TCP` on the agent host |
+
+### 1. Config
 
 ```bash
 cp config.yaml.example config.yaml
 ```
 
-Replace every placeholder secret before first run:
+Swap the placeholders before you actually use it:
 
 ```yaml
 server:
   port: 8000
-  gin_mode: release          # use release in production
+  gin_mode: release
 
 database:
   path: ./data/fishing.db
@@ -127,149 +128,163 @@ container:
   ssl_key_path: /app/certificates/key.pem
 ```
 
-Mail tracking (`public_base_url`, enable flag, secret, redirect allow-list) is managed in **System → Mail Tracking** after boot. YAML entries (if present) are seed / fallback only. Click and open URL paths are **not** configured globally—they are generated per mail campaign.
+`cmd/generate-encryption-key` can mint `encryption_key`. Mail tracking (public URL, HMAC, redirect allow-list) lives under **System → Mail Tracking** after boot. YAML is seed/fallback only. Click/open paths are generated per campaign, not globally.
 
-> Do **not** commit `config.yaml`, `data/`, or TLS private keys. They are listed in `.gitignore`.
+Don't commit `config.yaml`, `data/`, or TLS keys (they're gitignored).
 
-### 2. Run a release binary
+### 2. Run
 
 ```bash
 ./fishing-platform
-# or a platform build from ./release/ after build-all.sh
+# or a build from ./release/ after ./build-all.sh
 ```
 
-### 3. Build from source
+If it complains about empty/default secrets, that's fine on a lab box. Rotate them before a real job.
+
+### 3. Build
 
 ```bash
 ./build-all.sh
 ```
 
-This builds the frontend, then cross-compiles control-plane and agent binaries into `release/` for linux/windows/darwin (amd64 & arm64), and copies `config.yaml.example` / `agent.yaml.example`.
+Frontend first, then control plane + agent for linux/windows/darwin (amd64 & arm64). Copies `config.yaml.example` and `agent.yaml.example` into `release/`.
 
-Local dev (API already running separately):
+UI only (API already up):
 
 ```bash
 cd frontend && npm install && npm run dev   # http://127.0.0.1:8081
 ```
 
-### 4. Open the console
+### 4. Login
 
-Browse to `http://localhost:8000` (or your `server.port`).
-
-First boot writes admin credentials to:
+Open `http://localhost:8000` (or your `server.port`). First boot dumps admin creds here:
 
 ```bash
 cat data/admin_password.txt
 ```
 
-```text
-Username: admin
-Password: <generated>
+Save it, delete the file. Later resets: `cmd/reset-password`.
+
+---
+
+## Agents
+
+Don't want everything on the control plane? Drop **fishing-agent** on other machines. One project can hit many nodes; one node can host many projects. Each binding gets its own port, revision, and logs. Submits/logs go back to the mothership. If the plane blinks, the agent buffers and retries.
+
+Project ports default to **`10000–20000/TCP`**. The agent dials **out** to the control plane. Visitors hit the agent (or `advertise_host` behind a reverse proxy — see the full guide).
+
+**Token** — set `security.agent_registration_token` on the plane (not the JWT secret) and restart. First register uses that shared token once, then `{work_dir}/state.json` holds the per-agent id/token (`0600` on Linux/macOS).
+
+**Start** — `./build-all.sh` puts binaries + `agent.yaml.example` in `release/`:
+
+```bash
+cp agent.yaml.example agent.yaml
 ```
 
-Save the password and delete that file after login.
-
----
-
-## Operator modules
-
-Mapped to the sidebar as shipped:
-
-| Nav | Status | Notes |
-|-----|--------|--------|
-| **Dashboard** | Ready | Counters + host resource charts |
-| **Projects** | Ready | Overview · Deployments · Logs · Records |
-| **Workbench → Send Email** | Ready | Campaigns + open/click funnel |
-| **Workbench → Page Builder** | Ready | Upload / AI mirror / manage pages |
-| **Workbench → Info Gathering** | Ready | AI web search → structured contacts |
-| **Workbench → QR Phishing** | Ready | Live QR relay, SSE preview, frame history, project bind + `/q/{slug}.png` |
-| **Push Channels** | Ready | Multi-vendor webhooks |
-| **Agents** | Ready | Online capacity & registration |
-| **IP Blacklist** | Ready | From captures → host firewall |
-| **Mail Services** | Ready | SMTP profiles |
-| **Audit Logs** | Admin | Immutable |
-| **Users** | Admin | admin / operator |
-| **AI Settings** | Admin | Mirror rewrite models |
-| **Mail Tracking** | Admin | Public base URL & tracking crypto |
-
-Typical flow: configure SMTP + (optional) agents → build pages → create/deploy project → send campaign → review opens/clicks and credential records → optional IP block / push notify.
-
-Agent packaging, ports, and systemd: **[docs/agent-deployment.md](docs/agent-deployment.md)**. Default agent project port range: `10000–20000/TCP`.
-
----
-
-## Landing page hooks
-
-Runtimes expect submissions on the project submit route (default `/api/submit`).
-
-**JSON**
-
-```javascript
-await fetch('/api/submit', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ username, password, captchavalue }),
-})
+```yaml
+server_url: http://control-plane.example.com:8000   # no trailing slash
+registration_token: replace-with-a-long-random-agent-token
 ```
 
-**Form-urlencoded**
-
-```javascript
-const body = new URLSearchParams({ username, password, captchavalue })
-await fetch('/api/submit', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-  body,
-})
+```bash
+chmod +x ./fishing-agent
+./fishing-agent -config ./agent.yaml
 ```
 
-HTML templates may use `{{SUBMIT_URL}}`, `{{REDIRECT_URL}}`, `{{QR_RELAY_URL}}`, and `{{QR_RELAY_IMG}}`.  
-Mail bodies may use `{{email}}`, `{{click_url}}`, `{{open_pixel}}`, `{{landing_url}}`, and related tracking placeholders.
+```powershell
+.\fishing-agent-windows-amd64.exe -config .\agent.yaml
+```
 
-Full placeholder guides:
+You want a log line like `agent … connected to http://…`.
 
-- Chinese: [`docs/placeholders.zh.md`](docs/placeholders.zh.md)
-- English: [`docs/placeholders.en.md`](docs/placeholders.en.md)
+**In the UI** — **System → Agents** until it's online (~90s without heartbeat = offline). **Projects → New**, pick agents, upload HTML. Each agent is its own instance (`pending` → `deploying` → `running`). Logs and records roll up on the project. Edit = new revision; add agent = deploy; uncheck = delete task.
 
-HTTP access logs are written under `data/access-YYYY-MM-DD.log` (daily rotation). Successful fast `/api/dashboard` polls are omitted from the console but still recorded in the file.
-
----
-
-## Security & compliance
-
-- Rotate and protect `encryption_key`, `jwt_secret`, `container_secret`, and `agent_registration_token`. Changing `encryption_key` invalidates stored ciphertext (robot secrets, SMTP passwords, credential passwords, mail-tracking secret).
-- Prefer `gin_mode: release` and enable `platform_basic_auth_enabled` on any exposed console.
-- Treat harvested credentials and campaign recipient lists as highly sensitive.
-- Audit logs are designed to be **non-deletable** through the product API.
-- Operators are scoped to their own resources; admins manage users, audit, AI, and mail-tracking settings.
+systemd, Windows service, proxy: **[docs/agent-deployment.md](docs/agent-deployment.md)** (Chinese).
 
 ---
 
-## Repository layout (high level)
+## Console
+
+| | |
+|---|---|
+| **Dashboard** | Counts and host CPU/mem |
+| **Projects** | Overview, deployments, logs, records |
+| **Audit Logs** | Admin, no delete |
+| **Send Email** | Campaigns, open/click |
+| **Page Builder** | Upload / AI mirror |
+| **Info Gathering** | AI search → contacts |
+| **QR Phishing** | Live QR relay |
+| **Push Channels** | Webhook when someone submits |
+| **Agents** | Online / last seen |
+| **IP Blacklist** | Spray submits → ban the IP, keep blue team from flooding you |
+| **Mail Services** | SMTP |
+| **Users / AI / Mail Tracking** | Admin |
+
+Pages POST to `/api/submit` by default. HTML: `{{SUBMIT_URL}}`, `{{REDIRECT_URL}}`, `{{QR_RELAY_URL}}`, `{{QR_RELAY_IMG}}`. Mail: `{{email}}`, `{{click_url}}`, `{{open_pixel}}`, `{{landing_url}}`, …  
+Guides: [EN](docs/placeholders.en.md) · [ZH](docs/placeholders.zh.md)
+
+Access log: `data/access-YYYY-MM-DD.log`. Fast dashboard polls stay out of the console, still in the file.
+
+---
+
+## Docs
+
+| | |
+|---|---|
+| Placeholders (pages + mail) | [EN](docs/placeholders.en.md) · [ZH](docs/placeholders.zh.md) |
+| Agents (systemd, Windows, proxy) | [docs/agent-deployment.md](docs/agent-deployment.md) |
+| QR capture script | [scripts/qr-relay](scripts/qr-relay/README.md) — or download the zip from the QR page |
+
+QR: create a relay in the console, copy the upload token (shown once), drop it in the script config. It only uploads image frames + heartbeat. Public URL is `/q/{slug}.png`.
+
+---
+
+## Security
+
+- Rotate `encryption_key`, `jwt_secret`, `container_secret`, `agent_registration_token`. Changing `encryption_key` breaks stored ciphertext (SMTP, robot secrets, captured passwords, mail-tracking secret).
+- Exposed console: `gin_mode: release` + Basic Auth.
+- Treat captures, recipient lists, webhook URLs, and AI keys as live ammo.
+- Audit log is not deletable in the product API. Operators only see their own stuff.
+
+---
+
+## Stuck?
+
+| | |
+|---|---|
+| Can't open the UI | Port in `server.port`. If Basic Auth is on, the browser asks twice (perimeter then login). |
+| No admin password | `data/admin_password.txt` on first boot. Later: `cmd/reset-password`. |
+| Agent stays offline | It must **dial out** to `server_url`. ~90s without heartbeat = offline. Token must match `agent_registration_token` on first register. |
+| Mail opens/clicks are empty | **System → Mail Tracking**: enable it, set `public_base_url` to a URL the victim can actually hit. |
+| Local Flask won't start | `python3` in PATH, `pip install flask flask_cors requests`. |
+| Docker mode skipped | Engine not reachable (default `127.0.0.1:2375` in the startup check). Use local Flask or agents. |
+| QR health is stale | Capture script not running, or token/URL wrong. |
+
+---
+
+## Layout
 
 ```text
 main.go / handlers / models / middleware / utils / config
-agent/                 # edge agent binary
-frontend/              # Next.js SPA (build → frontend/dist, embedded)
+agent/                 # edge binary
+frontend/              # Next.js → frontend/dist (embedded)
+cmd/                   # generate-encryption-key, reset-password
 docs/agent-deployment.md
+docs/placeholders.en.md
+docs/placeholders.zh.md
 config.yaml.example
 agent.yaml.example
 build-all.sh
-README.assets/logo.svg
+README.md / README.zh.md
+README.assets/
 ```
 
 ---
 
-## License & intended use
+## Disclaimer
 
-Provided for **authorized security research, red-team / purple-team exercises, and awareness training**.  
+This is for red-team phishing **with permission**. Using it against people or systems you don't have authorization for is on you, and we don't support that.
 
-Unauthorized use against third parties is prohibited. Contributors and operators are responsible for complying with local law and engagement rules of engagement (RoE).
+Code is under the [MIT License](LICENSE).
 
-## Contributing
-
-Issues and pull requests are welcome. Prefer minimal diffs, clear repro steps, and notes on security impact.
-
-## Support
-
-Open a GitHub Issue for bugs, deployment questions, or feature requests.
+Issues and PRs welcome. Open a GitHub Issue if something's broken.

@@ -2,12 +2,22 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Check, Circle, Loader2, X } from "lucide-react";
 import { api } from "@/api";
 import { useI18n } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+
+const INFO_GATHER_STAGES = [
+  "starting",
+  "searching",
+  "synthesizing",
+  "parsing",
+  "saving",
+] as const;
+
+type InfoGatherStage = (typeof INFO_GATHER_STAGES)[number];
 
 type InfoGatherJob = {
   id: number;
@@ -20,6 +30,9 @@ type InfoGatherJob = {
   email_count: number;
   phone_count: number;
   finding_count: number;
+  progress_stage?: string;
+  progress_percent?: number;
+  progress_message?: string;
   model?: string;
   started_at?: string;
   finished_at?: string;
@@ -47,10 +60,12 @@ export default function WorkbenchInfoGatheringDetailPage() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { quiet?: boolean }) => {
     if (!id) return;
-    setLoading(true);
-    setError("");
+    if (!opts?.quiet) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const [jRes, fRes] = await Promise.all([
         api.getInfoGatherJob(id),
@@ -59,9 +74,11 @@ export default function WorkbenchInfoGatheringDetailPage() {
       setJob(jRes.data as InfoGatherJob);
       setFindings(Array.isArray(fRes.data) ? (fRes.data as InfoGatherFinding[]) : []);
     } catch {
-      setError(t("workbench.infoGatherFetchFailed"));
+      if (!opts?.quiet) {
+        setError(t("workbench.infoGatherFetchFailed"));
+      }
     } finally {
-      setLoading(false);
+      if (!opts?.quiet) setLoading(false);
     }
   }, [id, t]);
 
@@ -72,7 +89,9 @@ export default function WorkbenchInfoGatheringDetailPage() {
   useEffect(() => {
     if (!job) return;
     if (job.status !== "pending" && job.status !== "running") return;
-    const timer = window.setInterval(load, 8000);
+    const timer = window.setInterval(() => {
+      void load({ quiet: true });
+    }, 1500);
     return () => window.clearInterval(timer);
   }, [job, load]);
 
@@ -84,6 +103,51 @@ export default function WorkbenchInfoGatheringDetailPage() {
         .filter(Boolean),
     [findings],
   );
+
+  const contactFindings = useMemo(
+    () => findings.filter((f) => f.kind === "email" || f.kind === "phone"),
+    [findings],
+  );
+
+  const stageLabel = (stage: InfoGatherStage) => {
+    switch (stage) {
+      case "starting":
+        return t("workbench.infoGatherStageStarting");
+      case "searching":
+        return t("workbench.infoGatherStageSearching");
+      case "synthesizing":
+        return t("workbench.infoGatherStageSynthesizing");
+      case "parsing":
+        return t("workbench.infoGatherStageParsing");
+      case "saving":
+        return t("workbench.infoGatherStageSaving");
+    }
+  };
+
+  const stageStatus = (
+    stage: InfoGatherStage,
+  ): "pending" | "active" | "done" | "failed" => {
+    if (job?.status === "succeeded" || job?.status === "partial") {
+      return "done";
+    }
+    const current = job?.progress_stage || "";
+    if (current === "done") return "done";
+    const activeIdx = INFO_GATHER_STAGES.includes(current as InfoGatherStage)
+      ? INFO_GATHER_STAGES.indexOf(current as InfoGatherStage)
+      : job?.status === "pending" || job?.status === "running"
+        ? 0
+        : -1;
+    const idx = INFO_GATHER_STAGES.indexOf(stage);
+    if (activeIdx < 0) return "pending";
+    if (job?.status === "failed") {
+      if (idx < activeIdx) return "done";
+      if (idx === activeIdx) return "failed";
+      return "pending";
+    }
+    if (idx < activeIdx) return "done";
+    if (idx === activeIdx) return "active";
+    return "pending";
+  };
 
   const formatTime = (value?: string) => {
     if (!value) return "-";
@@ -291,6 +355,75 @@ export default function WorkbenchInfoGatheringDetailPage() {
         ))}
       </div>
 
+      {(job.status === "pending" ||
+        job.status === "running" ||
+        !!job.progress_stage) && (
+        <Card>
+          <CardContent className="space-y-3 p-4">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium">
+                {t("workbench.infoGatherProgressTitle")}
+              </p>
+              <span className="text-xs tabular-nums text-slate-500">
+                {Math.max(0, Math.min(100, job.progress_percent || 0))}%
+              </span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+              <div
+                className={`h-full rounded-full transition-all duration-300 ${
+                  job.status === "failed"
+                    ? "bg-red-500"
+                    : job.status === "succeeded" || job.status === "partial"
+                      ? "bg-emerald-500"
+                      : "bg-cyan-600"
+                }`}
+                style={{
+                  width: `${Math.max(0, Math.min(100, job.progress_percent || 0))}%`,
+                }}
+              />
+            </div>
+            <ol className="space-y-2">
+              {INFO_GATHER_STAGES.map((stage) => {
+                const status = stageStatus(stage);
+                return (
+                  <li key={stage} className="flex items-start gap-2 text-sm">
+                    <span className="mt-0.5 shrink-0">
+                      {status === "done" ? (
+                        <Check className="h-4 w-4 text-emerald-600" />
+                      ) : status === "active" ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-cyan-600" />
+                      ) : status === "failed" ? (
+                        <X className="h-4 w-4 text-red-600" />
+                      ) : (
+                        <Circle className="h-4 w-4 text-slate-300" />
+                      )}
+                    </span>
+                    <span
+                      className={
+                        status === "failed"
+                          ? "font-medium text-red-700"
+                          : status === "active"
+                            ? "font-medium text-slate-900"
+                            : status === "done"
+                              ? "text-slate-700"
+                              : "text-slate-400"
+                      }
+                    >
+                      {stageLabel(stage)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+            {job.progress_message ? (
+              <p className="text-xs text-slate-500 break-words">
+                {job.progress_message}
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardContent className="space-y-2 p-4 text-sm">
           <div className="flex justify-between gap-4">
@@ -331,16 +464,16 @@ export default function WorkbenchInfoGatheringDetailPage() {
               </tr>
             </thead>
             <tbody>
-              {!findings.length ? (
+              {!contactFindings.length ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
                     {job.status === "running" || job.status === "pending"
-                      ? "…"
+                      ? t("workbench.infoGatherProgressWaiting")
                       : t("workbench.infoGatherEmpty")}
                   </td>
                 </tr>
               ) : null}
-              {findings.map((f) => (
+              {contactFindings.map((f) => (
                 <tr key={f.id} className="border-b last:border-0 align-top">
                   <td className="px-4 py-2">{f.kind}</td>
                   <td className="px-4 py-2">

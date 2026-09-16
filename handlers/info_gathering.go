@@ -144,17 +144,20 @@ func RetryInfoGatherJob(c *gin.Context) {
 	}
 	now := time.Now()
 	updates := map[string]any{
-		"status":         models.InfoGatherJobPending,
-		"error_message":  "",
-		"raw_response":   "",
-		"summary_notes":  "",
-		"email_count":    0,
-		"phone_count":    0,
-		"finding_count":  0,
-		"model":          profile.Model,
-		"started_at":     nil,
-		"finished_at":    nil,
-		"updated_at":     now,
+		"status":           models.InfoGatherJobPending,
+		"error_message":    "",
+		"raw_response":     "",
+		"summary_notes":    "",
+		"email_count":      0,
+		"phone_count":      0,
+		"finding_count":    0,
+		"progress_stage":   "starting",
+		"progress_percent": 0,
+		"progress_message": "",
+		"model":            profile.Model,
+		"started_at":       nil,
+		"finished_at":      nil,
+		"updated_at":       now,
 	}
 	if err := db.Model(&job).Updates(updates).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reset job"})
@@ -242,9 +245,12 @@ func runInfoGatherJob(jobID uint) {
 
 	now := time.Now()
 	_ = db.Model(&job).Updates(map[string]any{
-		"status":     models.InfoGatherJobRunning,
-		"started_at": now,
-		"updated_at": now,
+		"status":           models.InfoGatherJobRunning,
+		"started_at":       now,
+		"updated_at":       now,
+		"progress_stage":   "starting",
+		"progress_percent": 5,
+		"progress_message": "Starting info gathering",
 	}).Error
 
 	profile, apiKey, active := ActiveAIConfig()
@@ -264,10 +270,20 @@ func runInfoGatherJob(jobID uint) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout+30*time.Second)
 	defer cancel()
 
+	setProgress := func(stage string, percent int, message string) {
+		_ = db.Model(&models.InfoGatherJob{}).Where("id = ?", jobID).Updates(map[string]any{
+			"progress_stage":   stage,
+			"progress_percent": percent,
+			"progress_message": message,
+			"updated_at":       time.Now(),
+		}).Error
+	}
+
 	result, err := utils.GatherContactsWithAI(ctx, profile.BaseURL, apiKey, profile.Model, timeout, utils.InfoGatherInput{
 		Target:         job.Target,
 		Notes:          job.Notes,
 		IncludeXSearch: job.IncludeXSearch,
+		OnProgress:     setProgress,
 	})
 
 	if err != nil && len(result.Findings) == 0 {
@@ -282,8 +298,12 @@ func runInfoGatherJob(jobID uint) {
 		errMsg = err.Error()
 	}
 
+	setProgress("saving", 95, "Saving email/phone findings")
 	findings := make([]models.InfoGatherFinding, 0, len(result.Findings))
 	for _, f := range result.Findings {
+		if f.Kind != "email" && f.Kind != "phone" {
+			continue
+		}
 		findings = append(findings, models.InfoGatherFinding{
 			JobID:      jobID,
 			Kind:       f.Kind,
@@ -336,15 +356,30 @@ func finishInfoGatherJob(jobID uint, status models.InfoGatherJobStatus, errMsg, 
 
 	finished := time.Now()
 	updates := map[string]any{
-		"status":         status,
-		"error_message":  errMsg,
-		"raw_response":   raw,
-		"summary_notes":  notes,
-		"email_count":    emailCount,
-		"phone_count":    phoneCount,
-		"finding_count":  len(findings),
-		"finished_at":    finished,
-		"updated_at":     finished,
+		"status":           status,
+		"error_message":    errMsg,
+		"raw_response":     raw,
+		"summary_notes":    notes,
+		"email_count":      emailCount,
+		"phone_count":      phoneCount,
+		"finding_count":    len(findings),
+		"progress_percent": 100,
+		"finished_at":      finished,
+		"updated_at":       finished,
+	}
+	switch status {
+	case models.InfoGatherJobFailed:
+		updates["progress_message"] = errMsg
+		if errMsg == "" {
+			updates["progress_message"] = "Failed"
+		}
+		// Keep progress_stage at the step that failed (already written by OnProgress).
+	case models.InfoGatherJobPartial:
+		updates["progress_stage"] = "done"
+		updates["progress_message"] = "Completed with warnings"
+	default:
+		updates["progress_stage"] = "done"
+		updates["progress_message"] = "Completed"
 	}
 	if err := tx.Model(&models.InfoGatherJob{}).Where("id = ?", jobID).Updates(updates).Error; err != nil {
 		tx.Rollback()
