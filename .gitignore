@@ -2,6 +2,11 @@
 .DS_Store
 .idea/
 .vscode/
+.cursor/
+
+# Next.js auto-generated agent instruction files
+frontend/AGENTS.md
+frontend/CLAUDE.md
 *.swp
 *.tmp
 *.bak
