@@ -11,7 +11,7 @@ import (
 )
 
 // AppVersion is shown on the startup banner.
-const AppVersion = "1.0.0"
+const AppVersion = "0.1.0"
 
 const (
 	ansiReset  = "\033[0m"
